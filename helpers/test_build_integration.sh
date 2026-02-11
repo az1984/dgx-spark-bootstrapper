@@ -3,23 +3,23 @@
 
 set -euo pipefail
 
-source "$(dirname "$0")/integrate_build.sh"
+# Initialize environment
+source "$(dirname "$0")/common_paths.sh"
 
-# Test environment setup
+# Test configuration
 export BUILDLLAMADEFAULT=1
-export INSTALL_VLLM=1 
+export INSTALL_VLLM=1
 export INSTALL_TTS_DEFAULT=1
-export DIR="$(dirname "$0")"
 export VLLM_VENV=""
 
 Log() {
   echo "[TEST] $*"
 }
 
-# Execute test
-if integrate_build; then
+if "${SCRIPT_DIR}/integrate_build.sh"; then
   echo "✅ Build integration test passed"
+  exit 0
 else
-  echo "❌ Build integration test failed"
+  echo "❌ Build integration test failed" 
   exit 1
 fi
