@@ -1,0 +1,134 @@
+# CLINERULES (Supreme Law)
+
+This file is the **highest-precedence instruction set** for all Cline runs in this repo.
+If anything elsewhere conflicts with this file, **this file wins**.
+
+---
+
+## 0. Prime Directives (non-negotiable)
+
+0.1 Obey the specs under `specs/` and do not invent contradictory behavior.  
+0.2 Implement in **small, reviewable slices** only.  
+0.3 **Mode discipline is mandatory**: Plan proposes; Act edits.  
+0.4 Keep output readable: do not dump huge tool output to terminal; route to logs and summarize.  
+0.5 Keep the repo safe: no destructive actions unless explicitly requested and gated behind `--act`.
+
+---
+
+## 1. Mode discipline (critical)
+
+### 1.1 Allowed actions by mode
+
+**MODE: PLAN** may only:
+- read/analyze specs and code
+- propose designs
+- write an Act Packet
+- propose diffs (text-only)
+- propose tests and smoke-test commands
+
+**MODE: PLAN** must NOT:
+- create/modify repo files
+- run commands
+- claim something is implemented/tested
+- update `specs/PROGRESS.md`
+
+**MODE: ACT** is the only mode allowed to:
+- create/modify repo files
+- run unit tests
+- run smoke tests
+- update `specs/PROGRESS.md`
+
+### 1.2 Mandatory mode check header
+Every response MUST start with one line:
+- `MODE: PLAN` or `MODE: ACT`
+
+### 1.3 Pre-action mode confirmation
+Immediately before any tool/action (file edit, command, test run), restate:
+- `MODE CONFIRMATION: <PLAN|ACT> — performing <action>`
+
+If the mode doesn’t match the intended action, STOP and switch to the correct mode first.
+
+---
+
+## 2. Engineering rules for this repo
+
+### 2.1 Absolute-path binaries (required)
+Launchers and ensure-state scripts must:
+- define `*_BIN` globals **at the top** (e.g. `RAY_BIN`, `VLLM_BIN`, `PTXAS_BIN`)
+- validate each is executable
+- avoid relying on `PATH` for critical commands
+
+If a binary isn’t available at the configured path, fail fast with a clear error.
+
+### 2.2 Ensure-state structure
+Prefer a puppet-esque pattern:
+- `check_*` functions: validate state and report drift
+- `fix_*` functions: apply deterministic changes
+- `ensure_*` wrappers: check, then optionally fix when `--act` is provided
+
+### 2.3 Mutations gated behind `--act`
+Default behavior is **check / dry-run**.
+Any mutating operation must require `--act`.
+If present, also honor `--act-on-max N` where applicable.
+
+### 2.4 Logging
+- Write verbose tool output to log files.
+- In terminal output, show concise summaries plus pointers to logs.
+- Prefer timestamps and host identifiers in log paths for multi-node runs.
+
+---
+
+## 3. Small-slice implementation (Act must be bite-sized)
+
+3.1 One Act run implements only:
+- 1–3 functions + their unit tests, OR
+- one small helper module + its unit tests
+
+3.2 Do NOT combine multiple unrelated spec areas in one Act run.  
+3.3 Keep diffs easy to review and revert.
+
+---
+
+## 4. Progress tracking (required)
+
+4.1 The repo must contain `specs/PROGRESS.md` and it is the single source of truth for feature state.  
+4.2 Track each item at the deepest numbering level available.  
+4.3 States:
+- `STARTED` (attempted / in progress)
+- `IMPLEMENTED` (wired up + smoke-tested)
+- `TESTED` (unit tests written and passing; treat as “100% state”)
+
+4.4 Only MODE: ACT may update `specs/PROGRESS.md`.  
+4.5 Each update includes date + short note/commit ref + paths to logs/output directories.
+
+---
+
+## 5. Required workflow: /implement (two-phase)
+
+Use `/implement` for all slices. It is designed to prevent mode drift and context bloat.
+
+### 5.1 Phase A — PLAN (Act Packet only; no file writes)
+Output ONLY the Act Packet. Do not edit files.
+
+**Act Packet must include:**
+- Scope: exact spec file(s) + numbered items
+- Files to touch (exact paths)
+- Public API contract (function signatures + return types)
+- Acceptance checks mapped to spec numbers
+- Unit test plan
+- Smoke test commands (dry-run first, then `--act --act-on-max N`)
+
+### 5.2 Phase B — ACT (execute the Act Packet exactly)
+In Act mode, do exactly what the Act Packet specifies:
+- write code + tests
+- run unit tests
+- run smoke tests on a tiny curated set
+- update `specs/PROGRESS.md`
+
+No extra features, no refactors, no scope creep.
+
+---
+
+## 6. Specs directory pointer
+
+All detailed behavior is defined in `specs/`. This file governs **how** you work; the specs govern **what** you build.
