@@ -441,30 +441,43 @@ RunHeartbeats() {
 
 source "$(dirname "$0")/helpers/semver.sh"
 
+source "$(dirname "$0")/helpers/tui.sh"
+
 VersionCheck() {
   Log "Running version validation..."
-  local errors=0
   local components=("python" "cuda")
   
   for comp in "${components[@]}"; do
-    if ! validate_version "$comp" "$($comp --version 2>&1 | head -1)"; then
-      Log "ERROR: Version mismatch for $comp"
-      ((errors++))
+    local current_ver="$($comp --version 2>&1 | head -1)"
+    if ! validate_version "$comp" "$current_ver"; then
+      local required_ver="$(grep "$comp" "./ai-configuration/desired_state/versions.txt" | cut -d'=' -f2)"
+      
+      prompt_version_mismatch "$comp" "$current_ver" "$required_ver"
+      case $? in
+        0) Log "User chose to upgrade $comp" ;;
+        1) Log "User deferred $comp upgrade"; touch "./ai-configuration/remediation_cookies/${comp}.cookie" ;;
+        *) Log "User cancelled"; exit 1 ;;
+      esac
     fi
   done
-  return $errors
 }
 
 Main() {
   RequireRoot
-  VersionCheck || exit 1
-
-  Log "=== bootstrap start ==="
-
-  # Directory skeleton first
-  CheckDirSkeleton || true
-  ApplyDirSkeletonFixes
-
+  
+  # Check for pending remediations
+  if ls "./ai-configuration/remediation_cookies/"*.cookie 1>/dev/null 2>&1; then
+    Log "Pending remediations detected:"
+    local pending_items=$(ls "./ai-configuration/remediation_cookies/"*.cookie | xargs -n1 basename | sed 's/.cookie$//')
+    echo "$pending_items"
+    
+    # Show TUI prompt
+    source "$(dirname "$0")/helpers/tui.sh"
+    prompt_remediation "Found pending remediations for:\n$pending_items\nFix now?"
+    case $? in
+      0) Log "Proceeding with remediation" ;;
+      1) Log "User deferred fixes"; exit 0 ;;
+      *)
   # Switch logging to /opt now that directory skeleton is enforced
   USE_OPT_LOGS=1
   Log "Switched logging to ${OPT_LOG_DIR}"
