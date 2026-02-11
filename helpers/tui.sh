@@ -12,6 +12,18 @@ log_interaction() {
   echo "$(date +'%FT%T') - $*" >> "$LOG_FILE"
 }
 
+prompt_version_mismatch() {
+  local component=$1
+  local current=$2
+  local required=$3
+  
+  whiptail --title "Version Mismatch" \
+    --yesno "Current: $current\nRequired: $required" \
+    --yes-button "Upgrade" \
+    --no-button "Skip" \
+    12 60
+}
+
 prompt_remediation() {
   local component=$1
   local message=$2

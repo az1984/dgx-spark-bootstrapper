@@ -439,8 +439,25 @@ RunHeartbeats() {
   fi
 }
 
+source "$(dirname "$0")/helpers/semver.sh"
+
+VersionCheck() {
+  Log "Running version validation..."
+  local errors=0
+  local components=("python" "cuda")
+  
+  for comp in "${components[@]}"; do
+    if ! validate_version "$comp" "$($comp --version 2>&1 | head -1)"; then
+      Log "ERROR: Version mismatch for $comp"
+      ((errors++))
+    fi
+  done
+  return $errors
+}
+
 Main() {
   RequireRoot
+  VersionCheck || exit 1
 
   Log "=== bootstrap start ==="
 
