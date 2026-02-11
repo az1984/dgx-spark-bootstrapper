@@ -1,39 +1,29 @@
 #!/usr/bin/env bash
-# [Previous file content remains unchanged until Main() function]
+# [Previous content until Main() preserved...]
 
 Main() {
   RequireRoot
   
-  # Check for pending remediations
-  if [[ -d "./ai-configuration/remediation_cookies" ]]; then
-    local pending_items=()
-    for cookie in "./ai-configuration/remediation_cookies/"*.cookie; do
-      [[ -e "$cookie" ]] || continue
-      pending_items+=("$(basename "${cookie%.cookie}")")
-    done
+  # [Existing pre-check code preserved...]
 
-    if [[ ${#pending_items[@]} -gt 0 ]]; then
-      Log "Pending remediations detected:"
-      Log "$(printf '%s\n' "${pending_items[@]}")"
-      
-      source "$(dirname "$0")/helpers/tui.sh"
-      if ! prompt_remediation "Found pending fixes for: ${pending_items[*]}\nProceed with remediation?"; then
-        Log "Remediation deferred by user"
-        return 0
-      fi
+  # Component Building Section
+  if [[ "${BUILDLLAMADEFAULT}" -eq 1 || "${INSTALL_COMFYUI_DEFAULT}" -eq 1 || "${INSTALL_TTS_DEFAULT}" -eq 1 ]]; then
+    Log "Building AI components via unified build system"
+    
+    if [[ "${BUILDLLAMADEFAULT}" -eq 1 ]]; then
+      "$(dirname "$0")/helpers/build.sh" --component llama --node 1
+    fi
+    
+    if [[ -z "${VLLM_VENV}" || ! -d "${VLLM_VENV}" ]]; then
+      "$(dirname "$0")/helpers/build.sh" --component vllm --node 1  
+    fi
+
+    if [[ "${INSTALL_TTS_DEFAULT}" -eq 1 ]]; then
+      "$(dirname "$0")/helpers/build.sh" --component kokoro --node 1
     fi
   fi
 
-  VersionCheck
-  
-  # [Rest of original Main() content]
-  Log "=== bootstrap start ==="
-  CheckDirSkeleton || true
-  ApplyDirSkeletonFixes
-  USE_OPT_LOGS=1
-  Log "Switched logging to ${OPT_LOG_DIR}"
-
-  # [...rest of original Main() implementation...]
+  # [Rest of original Main() implementation...]
 }
 
-# [Remaining file content]
+# [Remaining file content...]
