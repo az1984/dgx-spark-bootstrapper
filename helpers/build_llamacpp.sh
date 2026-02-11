@@ -274,14 +274,37 @@ PostInstallSanity() {
 }
 
 PrintVersionIfAvailable() {
-  local prefix="$1"
+  local prefix="$1" 
   local cli="${prefix}/bin/llama-cli"
 
   if [[ -x "${cli}" ]]; then
-    Log "llama-cli version:"
-    "${cli}" --version || true
+    local installed_ver="$("${cli}" --version 2>&1 | head -1)"
+    Log "llama-cli version: $installed_ver"
+    
+    # Version validation if versions.txt exists
+    if [[ -f "/opt/ai-configuration/desired_state/versions.txt" ]]; then
+      source "$(dirname "$0")/semver.sh"
+      source "$(dirname "$0")/tui.sh"
+      local required_ver="$(grep "llama" "/opt/ai-configuration/desired_state/versions.txt" | cut -d'=' -f2)"
+      
+      if ! validate_version "$installed_ver" "$required_ver"; then
+        Log "Version mismatch: installed $installed_ver, wanted $required_ver"
+        prompt_version_mismatch "llama" "$installed_ver" "$required_ver"
+        case $? in
+          0) return 1 ;; # User chose to proceed anyway
+          1) # User deferred
+             mkdir -p "/opt/ai-configuration/remediation_cookies"
+             touch "/opt/ai-configuration/remediation_cookies/llama.cookie"
+             return 1
+             ;;
+          *) exit 1 ;; # User cancelled
+        esac
+      fi
+    fi
+    return 0
   else
     Log "llama-cli not found at ${cli}"
+    return 1
   fi
 }
 
