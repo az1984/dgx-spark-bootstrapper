@@ -25,8 +25,14 @@ prompt_version_mismatch() {
 }
 
 prompt_remediation() {
-  local component=$1
-  local message=$2
+  local component="${1:-bootstrap}"
+  local message="${2:-$1}"
+  
+  # If only one arg, use it as message and default component to "bootstrap"
+  if [[ $# -eq 1 ]]; then
+    message="$1"
+    component="bootstrap"
+  fi
   
   whiptail --title "Remediation Required" \
     --yesno "$message" \
