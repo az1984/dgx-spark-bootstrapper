@@ -68,23 +68,19 @@ EnsureVenv() {
 # Returns: 0 on success, non-zero on pip failure
 # Globals: None (assumes venv is activated)
 InstallDependencies() {
-  local temp_clone=""          # Temporary clone directory
-  
   echo "Installing Kokoro TTS dependencies..."
   
-  pip install --upgrade numpy soundfile torch
+  # Install PyTorch first
+  pip install --upgrade torch
   
-  # Clone and install from local to avoid GitHub credentials prompt
-  temp_clone="/tmp/kokoro-tts-$$"
+  # Install Kokoro from PyPI (official hexgrad package)
+  # Note: This is the REAL Kokoro (Apache-licensed, 82M params)
+  # NOT kokoro-ai (which is a different/private project)
+  pip install kokoro soundfile
   
-  echo "Cloning kokoro-tts repository..."
-  git clone https://github.com/kokoro-ai/kokoro-tts.git "$temp_clone"
-  
-  echo "Installing kokoro-tts from local clone..."
-  pip install "$temp_clone"
-  
-  echo "Cleaning up temporary clone..."
-  rm -rf "$temp_clone"
+  # Install espeak-ng for phoneme fallback (system package, may already be installed)
+  echo "Note: Kokoro works best with espeak-ng installed system-wide"
+  echo "Install with: sudo apt-get install espeak-ng"
 }
 
 # LoadVersionRequirement - Read required version from versions.txt
