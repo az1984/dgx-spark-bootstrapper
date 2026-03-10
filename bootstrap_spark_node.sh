@@ -688,13 +688,13 @@ CoreExec() {
   Log "Phase 5: Detecting Missing Components"
   
   local missing_components=()
-  DetectMissingComponents missing_components
+  mapfile -t missing_components < <(DetectMissingComponents)
   
   if [[ ${#missing_components[@]} -gt 0 ]]; then
     Log "Missing components detected: ${missing_components[*]}"
     
     # Ask user if greenfield install
-    if PromptGreenfieldInstall "${missing_components[@]}"; then
+    if PromptGreenfieldInstall; then
       Log "User approved greenfield install"
       # Build flags are already set by PromptGreenfieldInstall
     else

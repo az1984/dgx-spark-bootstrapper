@@ -132,6 +132,16 @@ CreateNMProfile() {
   local mac="$2"                  # MAC address for profile
   local profile="spark_${iface}" # Connection profile name
   
+  # Check if profile already exists - delete old duplicates
+  if nmcli connection show "$profile" >/dev/null 2>&1; then
+    Log "Profile $profile already exists, removing old instances..."
+    # Delete ALL connections with this name (handles duplicates)
+    nmcli connection show | grep "^$profile " | awk '{print $2}' | while read -r uuid; do
+      nmcli connection delete uuid "$uuid" 2>/dev/null || true
+      Log "Deleted old profile instance: $uuid"
+    done
+  fi
+  
   nmcli connection add \
     type ethernet \
     con-name "$profile" \
