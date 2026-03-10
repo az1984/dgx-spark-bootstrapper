@@ -50,9 +50,12 @@ INSTALL_DOCKER_DEFAULT="${INSTALL_DOCKER_DEFAULT:-1}"
 INSTALL_PODMAN_DEFAULT="${INSTALL_PODMAN_DEFAULT:-0}"
 
 BUILDLLAMADEFAULT="${BUILDLLAMADEFAULT:-1}"
+INSTALL_VLLM="${INSTALL_VLLM:-1}"
 
 INSTALL_COMFYUI_DEFAULT="${INSTALL_COMFYUI_DEFAULT:-1}"
 INSTALL_TTS_DEFAULT="${INSTALL_TTS_DEFAULT:-1}"
+INSTALL_WHISPER_DEFAULT="${INSTALL_WHISPER_DEFAULT:-0}"
+INSTALL_DIA_DEFAULT="${INSTALL_DIA_DEFAULT:-0}"
 
 SEED_MODELS_DEFAULT="${SEED_MODELS_DEFAULT:-1}"
 RUN_HEARTBEATS_DEFAULT="${RUN_HEARTBEATS_DEFAULT:-1}"
@@ -457,8 +460,110 @@ VersionCheck() {
   # Add actual version checking logic here
 }
 
+DetectMissingComponents() {
+  local missing=()
+  
+  # Check for vLLM
+  if [[ ! -d "${VLLM_VENV}" ]]; then
+    missing+=("vllm")
+  fi
+  
+  # Check for llama.cpp
+  if [[ ! -x "${LLAMA_PREFIX}/bin/llama-cli" ]]; then
+    missing+=("llama")
+  fi
+  
+  # Check for ComfyUI
+  if [[ ! -d "${COMFYUI_SRC}/.git" ]] || [[ ! -d "${COMFYUI_VENV}" ]]; then
+    missing+=("comfyui")
+  fi
+  
+  # Check for Kokoro TTS
+  if [[ ! -d "${KOKORO_VENV}" ]]; then
+    missing+=("kokoro")
+  fi
+  
+  # Check for Whisper
+  if [[ ! -d "${AI_TOOLS}/whisper-env" ]]; then
+    missing+=("whisper")
+  fi
+  
+  # Check for Dia
+  if [[ ! -d "${AI_TOOLS}/dia-env" ]]; then
+    missing+=("dia")
+  fi
+  
+  # Return missing list
+  printf '%s\n' "${missing[@]}"
+}
+
+PromptGreenfieldInstall() {
+  local missing_components
+  mapfile -t missing_components < <(DetectMissingComponents)
+  
+  if [[ ${#missing_components[@]} -eq 0 ]]; then
+    Log "All components already installed"
+    return 0
+  fi
+  
+  Log "Missing components detected: ${missing_components[*]}"
+  
+  # Build message for TUI
+  local component_list=""
+  for comp in "${missing_components[@]}"; do
+    component_list+="  - ${comp}\n"
+  done
+  
+  if command -v whiptail >/dev/null 2>&1; then
+    if whiptail --title "Greenfield Install" \
+        --yesno "The following components are not installed:\n\n${component_list}\nInstall them now?" \
+        --yes-button "Install All" \
+        --no-button "Skip" \
+        15 60; then
+      
+      Log "User approved greenfield install"
+      
+      # Set feature flags based on what's missing
+      for comp in "${missing_components[@]}"; do
+        case "$comp" in
+          vllm)
+            INSTALL_VLLM=1
+            ;;
+          llama)
+            BUILDLLAMADEFAULT=1
+            ;;
+          comfyui)
+            INSTALL_COMFYUI_DEFAULT=1
+            ;;
+          kokoro)
+            INSTALL_TTS_DEFAULT=1
+            ;;
+          whisper)
+            INSTALL_WHISPER_DEFAULT=1
+            ;;
+          dia)
+            INSTALL_DIA_DEFAULT=1
+            ;;
+        esac
+      done
+      
+      return 0
+    else
+      Log "User skipped greenfield install; exiting"
+      exit 0
+    fi
+  else
+    # No whiptail, just proceed with defaults
+    Log "No TUI available; proceeding with install based on feature flags"
+    return 0
+  fi
+}
+
 Main() {
   RequireRoot
+
+  # Greenfield detection (check what's missing on fresh install)
+  PromptGreenfieldInstall
 
   # Check for pending remediations
   if ls "./ai-configuration/remediation_cookies/"*.cookie 1>/dev/null 2>&1; then
@@ -491,30 +596,60 @@ Main() {
   VersionCheck
 
   # Component Building Section
-  if [[ "${BUILDLLAMADEFAULT}" -eq 1 || "${INSTALL_COMFYUI_DEFAULT}" -eq 1 || "${INSTALL_TTS_DEFAULT}" -eq 1 ]]; then
+  if [[ "${BUILDLLAMADEFAULT}" -eq 1 ]] || \
+     [[ "${INSTALL_VLLM}" -eq 1 ]] || \
+     [[ "${INSTALL_COMFYUI_DEFAULT}" -eq 1 ]] || \
+     [[ "${INSTALL_TTS_DEFAULT}" -eq 1 ]] || \
+     [[ "${INSTALL_WHISPER_DEFAULT}" -eq 1 ]] || \
+     [[ "${INSTALL_DIA_DEFAULT}" -eq 1 ]]; then
+    
     Log "Building AI components via unified build system"
     
     if [[ "${BUILDLLAMADEFAULT}" -eq 1 ]]; then
       if [[ -f "$(dirname "$0")/helpers/build.sh" ]]; then
-        "$(dirname "$0")/helpers/build.sh" --component llama --node 1
+        "$(dirname "$0")/helpers/build.sh" --component llama --node 4
       else
         Log "WARNING: build.sh not found; skipping llama build"
       fi
     fi
     
-    if [[ -z "${VLLM_VENV}" || ! -d "${VLLM_VENV}" ]]; then
+    if [[ "${INSTALL_VLLM}" -eq 1 ]]; then
       if [[ -f "$(dirname "$0")/helpers/build.sh" ]]; then
-        "$(dirname "$0")/helpers/build.sh" --component vllm --node 1
+        "$(dirname "$0")/helpers/build.sh" --component vllm --node 4
       else
         Log "WARNING: build.sh not found; skipping vLLM build"
       fi
     fi
 
+    if [[ "${INSTALL_COMFYUI_DEFAULT}" -eq 1 ]]; then
+      if [[ -f "$(dirname "$0")/helpers/build.sh" ]]; then
+        "$(dirname "$0")/helpers/build.sh" --component comfyui --node 4
+      else
+        Log "WARNING: build.sh not found; skipping ComfyUI build"
+      fi
+    fi
+
     if [[ "${INSTALL_TTS_DEFAULT}" -eq 1 ]]; then
       if [[ -f "$(dirname "$0")/helpers/build.sh" ]]; then
-        "$(dirname "$0")/helpers/build.sh" --component kokoro --node 1
+        "$(dirname "$0")/helpers/build.sh" --component kokoro --node 4
       else
         Log "WARNING: build.sh not found; skipping Kokoro build"
+      fi
+    fi
+    
+    if [[ "${INSTALL_WHISPER_DEFAULT}" -eq 1 ]]; then
+      if [[ -f "$(dirname "$0")/helpers/build.sh" ]]; then
+        "$(dirname "$0")/helpers/build.sh" --component whisper --node 4
+      else
+        Log "WARNING: build.sh not found; skipping Whisper build"
+      fi
+    fi
+    
+    if [[ "${INSTALL_DIA_DEFAULT}" -eq 1 ]]; then
+      if [[ -f "$(dirname "$0")/helpers/build.sh" ]]; then
+        "$(dirname "$0")/helpers/build.sh" --component dia --node 4
+      else
+        Log "WARNING: build.sh not found; skipping Dia build"
       fi
     fi
   fi
