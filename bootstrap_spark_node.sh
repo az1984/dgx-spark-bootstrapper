@@ -483,9 +483,12 @@ RunHeartbeats() {
   fi
 
   if [[ -d "${COMFYUI_SRC}" && -f "${COMFYUI_VENV}/bin/activate" ]]; then
-    # shellcheck disable=SC1090
-    source "${COMFYUI_VENV}/bin/activate"
-    (cd "${COMFYUI_SRC}" && python -c "import nodes; print('ComfyUI import ok')")
+    # Just verify the venv and source exist - don't try to import (needs GPU)
+    if [[ -f "${COMFYUI_SRC}/main.py" ]]; then
+      Log "ComfyUI source and venv present"
+    else
+      Log "ComfyUI venv present but source incomplete"
+    fi
   else
     Log "ComfyUI not present; skipping ComfyUI heartbeat."
   fi
