@@ -130,6 +130,7 @@ ApplyMACOverride() {
 CreateNMProfile() {
   local iface="$1"                # Interface name
   local mac="$2"                  # MAC address for profile
+  local static_ip="${3:-}"        # Optional static IP (e.g., "10.10.10.4")
   local profile="spark_${iface}" # Connection profile name
   
   # Check if profile already exists - delete old duplicates
@@ -142,17 +143,49 @@ CreateNMProfile() {
     done
   fi
   
-  nmcli connection add \
-    type ethernet \
-    con-name "$profile" \
-    ifname "$iface" \
-    connection.interface-name "$iface" \
-    ethernet.cloned-mac-address "$mac" \
-    ipv4.method auto \
-    ipv6.method ignore
+  # Determine IP configuration method
+  local ipv4_method="auto"
+  local ipv4_addr_arg=""
   
-  nmcli connection up "$profile"
+  if [[ -n "$static_ip" ]]; then
+    ipv4_method="manual"
+    ipv4_addr_arg="ipv4.addresses ${static_ip}/24"
+    Log "Configuring static IP: $static_ip/24"
+  else
+    Log "Configuring DHCP (auto)"
+  fi
+  
+  # Create connection (handles both DHCP and static)
+  if [[ -n "$ipv4_addr_arg" ]]; then
+    nmcli connection add \
+      type ethernet \
+      con-name "$profile" \
+      ifname "$iface" \
+      connection.interface-name "$iface" \
+      ethernet.cloned-mac-address "$mac" \
+      ipv4.method "$ipv4_method" \
+      $ipv4_addr_arg \
+      ipv6.method ignore
+  else
+    nmcli connection add \
+      type ethernet \
+      con-name "$profile" \
+      ifname "$iface" \
+      connection.interface-name "$iface" \
+      ethernet.cloned-mac-address "$mac" \
+      ipv4.method "$ipv4_method" \
+      ipv6.method ignore
+  fi
+  
   Log "Created NetworkManager profile: $profile"
+  
+  # Try to activate, but don't fail if DHCP unavailable
+  if nmcli connection up "$profile" 2>/dev/null; then
+    Log "Successfully activated profile: $profile"
+  else
+    Log "WARNING: Could not activate $profile (DHCP unavailable or network not ready)"
+    Log "Profile created but not active. To activate later: nmcli connection up $profile"
+  fi
 }
 
 # ============================================================================
@@ -161,18 +194,31 @@ CreateNMProfile() {
 
 # CoreExec - Main execution function
 #
-# Arguments: All command-line args ($@) (currently unused)
+# Arguments: 
+#   $1 - node_id (optional): Node identifier (1-4)
+#   $2 - ib_subnet (optional): InfiniBand subnet (e.g., "10.10.10")
 # Outputs: Configuration progress via Log
 # Returns: Exits on error, 0 on success
 # Globals: Uses LAN_IFACE, FABRIC_IFACE
 CoreExec() {
   local fabric_mac=""             # Derived fabric MAC address
+  local node_id="${1:-}"          # Node ID from argument
+  local ib_subnet="${2:-10.10.10}" # IB subnet from argument or default
+  local ib_ip=""                  # Computed InfiniBand IP
   
   mkdir -p "$LOG_DIR"
   
   ValidateNetworkTools || exit 1
   
   Log "Starting network configuration"
+  
+  if [[ -n "$node_id" ]]; then
+    Log "Node ID: $node_id"
+    Log "IB Subnet: $ib_subnet"
+    ib_ip="${ib_subnet}.${node_id}"
+    Log "InfiniBand IP: $ib_ip"
+  fi
+  
   DetectInterfaces
   
   if [[ -z "${LAN_IFACE:-}" ]]; then
@@ -183,7 +229,7 @@ CoreExec() {
   if [[ -n "${FABRIC_IFACE:-}" ]]; then
     fabric_mac=$(DeriveFabricMAC "$FABRIC_IFACE")
     ApplyMACOverride "$FABRIC_IFACE" "$fabric_mac"
-    CreateNMProfile "$FABRIC_IFACE" "$fabric_mac"
+    CreateNMProfile "$FABRIC_IFACE" "$fabric_mac" "$ib_ip"
   else
     Log "No additional interface found for fabric network"
   fi

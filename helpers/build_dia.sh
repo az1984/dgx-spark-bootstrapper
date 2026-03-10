@@ -129,17 +129,6 @@ EnsureVenv() {
   echo "Active Python in venv: $(python --version)"
 }
 
-    python3 -m venv "$VENV_PATH"
-    # shellcheck disable=SC1090
-    source "$VENV_PATH/bin/activate"
-    pip install --upgrade pip
-  else
-    echo "Using existing virtual environment: $VENV_PATH"
-    # shellcheck disable=SC1090
-    source "$VENV_PATH/bin/activate"
-  fi
-}
-
 # InstallDependencies - Install Dia TTS and dependencies
 #
 # Arguments: None

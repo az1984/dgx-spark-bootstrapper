@@ -60,6 +60,64 @@ INSTALL_DIA_DEFAULT="${INSTALL_DIA_DEFAULT:-0}"
 SEED_MODELS_DEFAULT="${SEED_MODELS_DEFAULT:-1}"
 RUN_HEARTBEATS_DEFAULT="${RUN_HEARTBEATS_DEFAULT:-1}"
 
+# CLI arguments (set via ParseArgsCLI)
+NODE_ID=""                      # Node identifier (1-4)
+IB_SUBNET="10.10.10"           # InfiniBand subnet (default: 10.10.10)
+
+# ============================================================================
+# Utility Functions
+# ============================================================================
+
+# ParseArgsCLI - Parse command-line arguments
+#
+# Arguments: All command-line arguments ($@)
+# Outputs: Usage message on --help or invalid args
+# Returns: 0 on success, exits on error
+# Globals: Sets NODE_ID, IB_SUBNET
+ParseArgsCLI() {
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --node)
+        NODE_ID="$2"
+        shift 2
+        ;;
+      --ib-subnet)
+        IB_SUBNET="$2"
+        shift 2
+        ;;
+      --help|-h)
+        cat <<'EOF'
+Usage: bootstrap_spark_node.sh [OPTIONS]
+
+Options:
+  --node <1-4>          Node ID for InfiniBand configuration
+                        (1=magnesium, 2=aluminium, 3=silicon, 4=phosphorus)
+  
+  --ib-subnet <subnet>  InfiniBand subnet (default: 10.10.10)
+                        Node will get IP: <subnet>.<node>
+  
+  --help, -h            Show this help message
+
+Examples:
+  # Node 4 (phosphorus) with default subnet
+  sudo ./bootstrap_spark_node.sh --node 4
+  
+  # Node 1 with custom subnet
+  sudo ./bootstrap_spark_node.sh --node 1 --ib-subnet 192.168.100
+  
+  # Will configure: 192.168.100.1
+EOF
+        exit 0
+        ;;
+      *)
+        echo "ERROR: Unknown argument: $1"
+        echo "Use --help for usage information"
+        exit 1
+        ;;
+    esac
+  done
+}
+
 RequireRoot() {
   if [[ "${EUID}" -ne 0 ]]; then
     echo "ERROR: run as root (sudo)."
@@ -424,10 +482,10 @@ RunHeartbeats() {
     Log "vLLM venv not present; skipping vLLM heartbeat."
   fi
 
-  if [[ -d "${COMFYUI_SRC}" && -d "${COMFYUI_VENV}" ]]; then
+  if [[ -d "${COMFYUI_SRC}" && -f "${COMFYUI_VENV}/bin/activate" ]]; then
     # shellcheck disable=SC1090
     source "${COMFYUI_VENV}/bin/activate"
-    python -c "import importlib, compileall; importlib.import_module('nodes'); print('ComfyUI import ok'); compileall.compile_dir('${COMFYUI_SRC}', quiet=1)"
+    (cd "${COMFYUI_SRC}" && python -c "import nodes; print('ComfyUI import ok')")
   else
     Log "ComfyUI not present; skipping ComfyUI heartbeat."
   fi
@@ -590,6 +648,7 @@ PromptGreenfieldInstall() {
 }
 
 CoreExec() {
+  ParseArgsCLI "$@"
   RequireRoot
 
   # =========================================================================
@@ -674,7 +733,7 @@ CoreExec() {
   Log "Phase 4: Network Configuration"
   
   if [[ -x "$(dirname "$0")/helpers/configure_networking.sh" ]]; then
-    "$(dirname "$0")/helpers/configure_networking.sh" || {
+    "$(dirname "$0")/helpers/configure_networking.sh" "$NODE_ID" "$IB_SUBNET" || {
       Log "WARNING: Network configuration failed, continuing"
     }
   else
