@@ -54,7 +54,72 @@ ValidateDependencies() {
 # Returns: 0 (always succeeds, exits on venv creation failure)
 # Globals: Sets VENV_PATH
 EnsureVenv() {
+  local python_cmd=""          # Python command to use
+  local python_version=""      # Python version string
+  local py_major_minor=""      # Major.minor version
+  
   VENV_PATH="/opt/ai-tools/dia-env"
+  
+  # Coqui TTS requires Python <3.12 (incompatible with 3.12+)
+  # Try to find suitable Python version
+  
+  # First, try Python 3.11 (ideal for Coqui TTS)
+  if command -v python3.11 >/dev/null 2>&1; then
+    python_cmd="python3.11"
+    echo "Using Python 3.11 for Dia TTS: $(python3.11 --version)"
+  
+  # Second, try pyenv-installed 3.11
+  elif [[ -x "$HOME/.pyenv/versions/3.11.8/bin/python" ]]; then
+    python_cmd="$HOME/.pyenv/versions/3.11.8/bin/python"
+    echo "Using Python 3.11 via pyenv for Dia TTS"
+  
+  # Third, check if system python3 is compatible
+  elif command -v python3 >/dev/null 2>&1; then
+    python_version=$(python3 --version 2>&1 | awk '{print $2}')
+    py_major_minor=$(echo "${python_version}" | cut -d'.' -f1-2)
+    
+    echo "Detected system Python version: ${python_version}"
+    
+    # Check if compatible (3.9, 3.10, or 3.11)
+    if [[ "${py_major_minor}" == "3.9" ]] || \
+       [[ "${py_major_minor}" == "3.10" ]] || \
+       [[ "${py_major_minor}" == "3.11" ]]; then
+      python_cmd="python3"
+      echo "System Python ${python_version} is compatible with Coqui TTS"
+    else
+      echo "ERROR: Coqui TTS does not support Python ${py_major_minor}"
+      echo ""
+      echo "Coqui TTS requires Python 3.9, 3.10, or 3.11"
+      echo "System has Python ${python_version} which is incompatible"
+      echo ""
+      echo "Install Python 3.11 with:"
+      echo "  sudo add-apt-repository ppa:deadsnakes/ppa"
+      echo "  sudo apt update"
+      echo "  sudo apt install python3.11 python3.11-venv python3.11-dev"
+      echo ""
+      echo "Then re-run this script - it will auto-detect python3.11"
+      echo ""
+      return 1
+    fi
+  else
+    echo "ERROR: No Python installation found"
+    return 1
+  fi
+  
+  if [[ ! -d "$VENV_PATH" ]]; then
+    echo "Creating virtual environment with ${python_cmd}: $VENV_PATH"
+    "${python_cmd}" -m venv "$VENV_PATH"
+    # shellcheck disable=SC1090
+    source "$VENV_PATH/bin/activate"
+    pip install --upgrade pip
+  else
+    echo "Using existing virtual environment: $VENV_PATH"
+    # shellcheck disable=SC1090
+    source "$VENV_PATH/bin/activate"
+  fi
+  
+  echo "Active Python in venv: $(python --version)"
+}
   
   if [[ ! -d "$VENV_PATH" ]]; then
     echo "Creating virtual environment: $VENV_PATH"

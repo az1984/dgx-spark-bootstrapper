@@ -604,6 +604,9 @@ Main() {
   Log "  INSTALL_WHISPER_DEFAULT=${INSTALL_WHISPER_DEFAULT}"
   Log "  INSTALL_DIA_DEFAULT=${INSTALL_DIA_DEFAULT}"
   
+ # Bootstrap Build Section - Error Handling Patch
+# Replace lines 607-677 in bootstrap_spark_node.sh
+
   if [[ "${BUILDLLAMADEFAULT}" -eq 1 ]] || \
      [[ "${INSTALL_VLLM}" -eq 1 ]] || \
      [[ "${INSTALL_COMFYUI_DEFAULT}" -eq 1 ]] || \
@@ -613,64 +616,111 @@ Main() {
     
     Log "Building AI components via unified build system"
     
+    # Track build failures (non-fatal)
+    local build_failures=()
+    
     if [[ "${BUILDLLAMADEFAULT}" -eq 1 ]]; then
       Log "Attempting llama build..."
       if [[ -f "$(dirname "$0")/helpers/build.sh" ]]; then
-        Log "Running: $(dirname "$0")/helpers/build.sh --component llama "
-        "$(dirname "$0")/helpers/build.sh" --component llama 
+        Log "Running: $(dirname "$0")/helpers/build.sh --component llama"
+        if "$(dirname "$0")/helpers/build.sh" --component llama; then
+          Log "✓ llama build succeeded"
+        else
+          Log "✗ llama build failed (exit code: $?)"
+          build_failures+=("llama")
+        fi
       else
         Log "WARNING: build.sh not found at $(dirname "$0")/helpers/build.sh"
+        build_failures+=("llama (build.sh missing)")
       fi
     fi
     
     if [[ "${INSTALL_VLLM}" -eq 1 ]]; then
       Log "Attempting vLLM build..."
       if [[ -f "$(dirname "$0")/helpers/build.sh" ]]; then
-        Log "Running: $(dirname "$0")/helpers/build.sh --component vllm "
-        "$(dirname "$0")/helpers/build.sh" --component vllm 
+        Log "Running: $(dirname "$0")/helpers/build.sh --component vllm"
+        if "$(dirname "$0")/helpers/build.sh" --component vllm; then
+          Log "✓ vLLM build succeeded"
+        else
+          Log "✗ vLLM build failed (exit code: $?)"
+          build_failures+=("vllm")
+        fi
       else
-        Log "WARNING: build.sh not found at $(dirname "$0")/helpers/build.sh"
+        Log "WARNING: build.sh not found"
+        build_failures+=("vllm (build.sh missing)")
       fi
     fi
 
     if [[ "${INSTALL_COMFYUI_DEFAULT}" -eq 1 ]]; then
       Log "Attempting ComfyUI build..."
       if [[ -f "$(dirname "$0")/helpers/build.sh" ]]; then
-        Log "Running: $(dirname "$0")/helpers/build.sh --component comfyui "
-        "$(dirname "$0")/helpers/build.sh" --component comfyui 
+        Log "Running: $(dirname "$0")/helpers/build.sh --component comfyui"
+        if "$(dirname "$0")/helpers/build.sh" --component comfyui; then
+          Log "✓ ComfyUI build succeeded"
+        else
+          Log "✗ ComfyUI build failed (exit code: $?)"
+          build_failures+=("comfyui")
+        fi
       else
-        Log "WARNING: build.sh not found at $(dirname "$0")/helpers/build.sh"
+        Log "WARNING: build.sh not found"
+        build_failures+=("comfyui (build.sh missing)")
       fi
     fi
 
     if [[ "${INSTALL_TTS_DEFAULT}" -eq 1 ]]; then
       Log "Attempting Kokoro build..."
       if [[ -f "$(dirname "$0")/helpers/build.sh" ]]; then
-        Log "Running: $(dirname "$0")/helpers/build.sh --component kokoro "
-        "$(dirname "$0")/helpers/build.sh" --component kokoro 
+        Log "Running: $(dirname "$0")/helpers/build.sh --component kokoro"
+        if "$(dirname "$0")/helpers/build.sh" --component kokoro; then
+          Log "✓ Kokoro build succeeded"
+        else
+          Log "✗ Kokoro build failed (exit code: $?)"
+          build_failures+=("kokoro")
+        fi
       else
-        Log "WARNING: build.sh not found at $(dirname "$0")/helpers/build.sh"
+        Log "WARNING: build.sh not found"
+        build_failures+=("kokoro (build.sh missing)")
       fi
     fi
     
     if [[ "${INSTALL_WHISPER_DEFAULT}" -eq 1 ]]; then
       Log "Attempting Whisper build..."
       if [[ -f "$(dirname "$0")/helpers/build.sh" ]]; then
-        Log "Running: $(dirname "$0")/helpers/build.sh --component whisper "
-        "$(dirname "$0")/helpers/build.sh" --component whisper 
+        Log "Running: $(dirname "$0")/helpers/build.sh --component whisper"
+        if "$(dirname "$0")/helpers/build.sh" --component whisper; then
+          Log "✓ Whisper build succeeded"
+        else
+          Log "✗ Whisper build failed (exit code: $?)"
+          build_failures+=("whisper")
+        fi
       else
-        Log "WARNING: build.sh not found at $(dirname "$0")/helpers/build.sh"
+        Log "WARNING: build.sh not found"
+        build_failures+=("whisper (build.sh missing)")
       fi
     fi
     
     if [[ "${INSTALL_DIA_DEFAULT}" -eq 1 ]]; then
       Log "Attempting Dia build..."
       if [[ -f "$(dirname "$0")/helpers/build.sh" ]]; then
-        Log "Running: $(dirname "$0")/helpers/build.sh --component dia "
-        "$(dirname "$0")/helpers/build.sh" --component dia 
+        Log "Running: $(dirname "$0")/helpers/build.sh --component dia"
+        if "$(dirname "$0")/helpers/build.sh" --component dia; then
+          Log "✓ Dia build succeeded"
+        else
+          Log "✗ Dia build failed (exit code: $?)"
+          build_failures+=("dia")
+        fi
       else
-        Log "WARNING: build.sh not found at $(dirname "$0")/helpers/build.sh"
+        Log "WARNING: build.sh not found"
+        build_failures+=("dia (build.sh missing)")
       fi
+    fi
+    
+    # Report build summary
+    if [[ ${#build_failures[@]} -gt 0 ]]; then
+      Log "Build failures: ${build_failures[*]}"
+      Log "Some components failed to build, but continuing with bootstrap"
+    else
+      Log "All component builds completed successfully"
     fi
   else
     Log "No build flags set; skipping component builds"

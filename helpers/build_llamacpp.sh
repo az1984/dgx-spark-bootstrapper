@@ -432,7 +432,7 @@ PrintVersionIfAvailable() {
     return 1
   fi
 
-  installed_ver="$("${cli}" --version 2>&1 | head -1)"
+  installed_ver="$("${cli}" --version 2>&1 | head -1 || true)"
   Log "llama-cli version: $installed_ver"
   
   # Version validation if versions.txt exists
