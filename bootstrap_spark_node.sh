@@ -576,7 +576,7 @@ Main() {
       prompt_remediation "Found pending remediations for:\n$pending_items\nFix now?"
       case $? in
         0) Log "Proceeding with remediation" ;;
-        1) Log "User deferred fixes"; exit 0 ;;
+        1) Log "User deferred fixes; continuing with bootstrap" ;;
         *) Log "User cancelled"; exit 1 ;;
       esac
     else
@@ -596,6 +596,14 @@ Main() {
   VersionCheck
 
   # Component Building Section
+  Log "Checking build flags:"
+  Log "  BUILDLLAMADEFAULT=${BUILDLLAMADEFAULT}"
+  Log "  INSTALL_VLLM=${INSTALL_VLLM}"
+  Log "  INSTALL_COMFYUI_DEFAULT=${INSTALL_COMFYUI_DEFAULT}"
+  Log "  INSTALL_TTS_DEFAULT=${INSTALL_TTS_DEFAULT}"
+  Log "  INSTALL_WHISPER_DEFAULT=${INSTALL_WHISPER_DEFAULT}"
+  Log "  INSTALL_DIA_DEFAULT=${INSTALL_DIA_DEFAULT}"
+  
   if [[ "${BUILDLLAMADEFAULT}" -eq 1 ]] || \
      [[ "${INSTALL_VLLM}" -eq 1 ]] || \
      [[ "${INSTALL_COMFYUI_DEFAULT}" -eq 1 ]] || \
@@ -606,52 +614,66 @@ Main() {
     Log "Building AI components via unified build system"
     
     if [[ "${BUILDLLAMADEFAULT}" -eq 1 ]]; then
+      Log "Attempting llama build..."
       if [[ -f "$(dirname "$0")/helpers/build.sh" ]]; then
+        Log "Running: $(dirname "$0")/helpers/build.sh --component llama --node 4"
         "$(dirname "$0")/helpers/build.sh" --component llama --node 4
       else
-        Log "WARNING: build.sh not found; skipping llama build"
+        Log "WARNING: build.sh not found at $(dirname "$0")/helpers/build.sh"
       fi
     fi
     
     if [[ "${INSTALL_VLLM}" -eq 1 ]]; then
+      Log "Attempting vLLM build..."
       if [[ -f "$(dirname "$0")/helpers/build.sh" ]]; then
+        Log "Running: $(dirname "$0")/helpers/build.sh --component vllm --node 4"
         "$(dirname "$0")/helpers/build.sh" --component vllm --node 4
       else
-        Log "WARNING: build.sh not found; skipping vLLM build"
+        Log "WARNING: build.sh not found at $(dirname "$0")/helpers/build.sh"
       fi
     fi
 
     if [[ "${INSTALL_COMFYUI_DEFAULT}" -eq 1 ]]; then
+      Log "Attempting ComfyUI build..."
       if [[ -f "$(dirname "$0")/helpers/build.sh" ]]; then
+        Log "Running: $(dirname "$0")/helpers/build.sh --component comfyui --node 4"
         "$(dirname "$0")/helpers/build.sh" --component comfyui --node 4
       else
-        Log "WARNING: build.sh not found; skipping ComfyUI build"
+        Log "WARNING: build.sh not found at $(dirname "$0")/helpers/build.sh"
       fi
     fi
 
     if [[ "${INSTALL_TTS_DEFAULT}" -eq 1 ]]; then
+      Log "Attempting Kokoro build..."
       if [[ -f "$(dirname "$0")/helpers/build.sh" ]]; then
+        Log "Running: $(dirname "$0")/helpers/build.sh --component kokoro --node 4"
         "$(dirname "$0")/helpers/build.sh" --component kokoro --node 4
       else
-        Log "WARNING: build.sh not found; skipping Kokoro build"
+        Log "WARNING: build.sh not found at $(dirname "$0")/helpers/build.sh"
       fi
     fi
     
     if [[ "${INSTALL_WHISPER_DEFAULT}" -eq 1 ]]; then
+      Log "Attempting Whisper build..."
       if [[ -f "$(dirname "$0")/helpers/build.sh" ]]; then
+        Log "Running: $(dirname "$0")/helpers/build.sh --component whisper --node 4"
         "$(dirname "$0")/helpers/build.sh" --component whisper --node 4
       else
-        Log "WARNING: build.sh not found; skipping Whisper build"
+        Log "WARNING: build.sh not found at $(dirname "$0")/helpers/build.sh"
       fi
     fi
     
     if [[ "${INSTALL_DIA_DEFAULT}" -eq 1 ]]; then
+      Log "Attempting Dia build..."
       if [[ -f "$(dirname "$0")/helpers/build.sh" ]]; then
+        Log "Running: $(dirname "$0")/helpers/build.sh --component dia --node 4"
         "$(dirname "$0")/helpers/build.sh" --component dia --node 4
       else
-        Log "WARNING: build.sh not found; skipping Dia build"
+        Log "WARNING: build.sh not found at $(dirname "$0")/helpers/build.sh"
       fi
     fi
+  else
+    Log "No build flags set; skipping component builds"
   fi
 
   # Install apt packages if enabled
