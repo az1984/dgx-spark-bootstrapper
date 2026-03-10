@@ -22,18 +22,40 @@
 
 set -euo pipefail
 
-REPOURLDEFAULT="https://github.com/ggml-org/llama.cpp"
+# ============================================================================
+# Global Variables
+# ============================================================================
 
-SRCDEFAULT="/opt/ai-tools/src/llama.cpp"
-BUILDROOTDEFAULT="/opt/ai-tools/build/llama.cpp"
-PREFIXDEFAULT="/opt/ai-tools/llama.cpp"
+REPO_URL_DEFAULT="https://github.com/ggml-org/llama.cpp"  # Default git repo URL
 
-PRESETDEFAULT=""   # auto: linux->cuda, darwin->metal
-DOUPDATE=0
-DOCLEAN=0
-JOBS="$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)"
+SRC_DEFAULT="/opt/ai-tools/src/llama.cpp"                 # Default source directory
+BUILD_ROOT_DEFAULT="/opt/ai-tools/build/llama.cpp"        # Default build root
+PREFIX_DEFAULT="/opt/ai-tools/llama.cpp"                  # Default install prefix
 
-Usage() {
+PRESET_DEFAULT=""                                          # Auto-detect: linux->cuda, darwin->metal
+DO_UPDATE=0                                                # Flag: git fetch/pull before build
+DO_CLEAN=0                                                 # Flag: delete build dir before build
+JOBS="$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)" # Parallel build jobs
+
+# Set by argument parsing
+SRC_DIR="${SRC_DEFAULT}"                                   # Source checkout directory
+BUILD_ROOT="${BUILD_ROOT_DEFAULT}"                         # Build root directory
+PREFIX="${PREFIX_DEFAULT}"                                 # Install prefix
+REPO_URL="${REPO_URL_DEFAULT}"                             # Git repo URL
+PRESET="${PRESET_DEFAULT}"                                 # Build preset (cuda|metal|cpu)
+BUILD_DIR=""                                               # Build directory (derived from preset)
+
+# ============================================================================
+# Utility Functions
+# ============================================================================
+
+# ShowUsage - Display help text and exit
+#
+# Arguments: None
+# Outputs: Usage text to stdout
+# Returns: Exits with code 0
+# Globals: None
+ShowUsage() {
   cat <<'USAGE'
 Usage:
   build_llamacpp.sh [options]
@@ -72,12 +94,41 @@ Examples (DGX Spark / Linux CUDA):
 Example (macOS / Metal):
   ./build_llamacpp.sh --preset metal --update
 USAGE
+  exit 0
 }
 
-Log() { printf '[build_llamacpp] %s\n' "$*"; }
-Die() { printf '[build_llamacpp] ERROR: %s\n' "$*" >&2; exit 1; }
+# Log - Write log message with prefix
+#
+# Arguments: All message components ($@)
+# Outputs: Formatted message to stdout
+# Returns: 0 (always succeeds)
+# Globals: None
+Log() {
+  printf '[build_llamacpp] %s\n' "$*"
+}
 
-FindCudaCompiler() {
+# Die - Write error message and exit
+#
+# Arguments: All error message components ($@)
+# Outputs: Formatted error to stderr
+# Returns: Exits with code 1
+# Globals: None
+Die() {
+  printf '[build_llamacpp] ERROR: %s\n' "$*" >&2
+  exit 1
+}
+
+# FindCUDACompiler - Locate CUDA compiler (nvcc)
+#
+# Arguments: None
+# Outputs: Path to nvcc to stdout
+# Returns: 0 if found, 1 if not found
+# Globals: Reads CUDACXX (optional override)
+FindCUDACompiler() {
+  local candidates=()          # List of potential nvcc paths
+  local c=""                   # Current candidate being checked
+  local expanded=""            # Expanded glob pattern
+  
   # Prefer explicit env overrides
   if [[ -n "${CUDACXX:-}" && -x "${CUDACXX}" ]]; then
     echo "${CUDACXX}"
@@ -85,16 +136,15 @@ FindCudaCompiler() {
   fi
 
   # Common CUDA locations on Linux (including ARM SBSA)
-  local candidates=(
+  candidates=(
     "/usr/local/cuda/bin/nvcc"
     "/usr/local/cuda-13.0/bin/nvcc"
     "/usr/local/cuda-12.*/bin/nvcc"
     "/usr/bin/nvcc"
   )
 
-  local c
   for c in "${candidates[@]}"; do
-    # allow globs
+    # Allow globs
     for expanded in $c; do
       if [[ -x "${expanded}" ]]; then
         echo "${expanded}"
@@ -103,6 +153,7 @@ FindCudaCompiler() {
     done
   done
 
+  # Check PATH
   if command -v nvcc >/dev/null 2>&1; then
     command -v nvcc
     return 0
@@ -111,9 +162,16 @@ FindCudaCompiler() {
   return 1
 }
 
-EnsureCudaCompiler() {
-  local nvcc
-  nvcc="$(FindCudaCompiler || true)"
+# EnsureCUDACompiler - Verify CUDA compiler is available, exit if not
+#
+# Arguments: None
+# Outputs: Status message via Log, error via Die
+# Returns: Exits on failure, 0 on success
+# Globals: Sets CUDACXX
+EnsureCUDACompiler() {
+  local nvcc=""                # Path to CUDA compiler
+  
+  nvcc="$(FindCUDACompiler || true)"
 
   if [[ -z "${nvcc}" ]]; then
     Die "CUDA preset selected but nvcc (CUDA compiler) was not found.\n\nCMake may still detect CUDA headers/libraries (e.g., /usr/local/cuda/targets/*/include), but llama.cpp CUDA builds require nvcc.\n\nFix options:\n  1) Install the full CUDA toolkit that provides nvcc (not just runtime/headers), then re-run.\n  2) Or build CPU-only: --preset cpu\n\nTo confirm after install: \`nvcc --version\` and ensure /usr/local/cuda/bin is on PATH."
@@ -123,70 +181,119 @@ EnsureCudaCompiler() {
   Log "Using CUDA compiler: ${CUDACXX}"
 }
 
-OsDefaultPreset() {
-  local unameS
-  unameS="$(uname -s | tr '[:upper:]' '[:lower:]')"
-  if [[ "${unameS}" == "darwin" ]]; then
+# OSDefaultPreset - Determine default preset based on OS
+#
+# Arguments: None
+# Outputs: Preset name (cuda|metal) to stdout
+# Returns: 0 (always succeeds)
+# Globals: None
+OSDefaultPreset() {
+  local uname_s=""             # Lowercase OS name
+  
+  uname_s="$(uname -s | tr '[:upper:]' '[:lower:]')"
+  
+  if [[ "${uname_s}" == "darwin" ]]; then
     echo "metal"
   else
     echo "cuda"
   fi
 }
 
+# EnsureParentDir - Create parent directory if missing
+#
+# Arguments:
+#   $1 - path (string)
+# Outputs: None
+# Returns: 0 (always succeeds with set -e)
+# Globals: None
 EnsureParentDir() {
-  local path="$1"
+  local path="$1"              # Path whose parent should exist
   mkdir -p "$(dirname "${path}")"
 }
 
+# CloneIfNeeded - Clone repo if not already present
+#
+# Arguments:
+#   $1 - repo_url (string)
+#   $2 - src_dir (string)
+# Outputs: Status messages via Log
+# Returns: 0 (always succeeds with set -e)
+# Globals: None
 CloneIfNeeded() {
-  local repoUrl="$1"
-  local srcDir="$2"
+  local repo_url="$1"          # Git repository URL
+  local src_dir="$2"           # Target source directory
 
-  if [[ -d "${srcDir}/.git" ]]; then
-    Log "Source exists: ${srcDir}"
+  if [[ -d "${src_dir}/.git" ]]; then
+    Log "Source exists: ${src_dir}"
     return 0
   fi
 
-  EnsureParentDir "${srcDir}"
-  Log "Cloning llama.cpp into ${srcDir}"
-  git clone "${repoUrl}" "${srcDir}"
+  EnsureParentDir "${src_dir}"
+  Log "Cloning llama.cpp into ${src_dir}"
+  git clone "${repo_url}" "${src_dir}"
 }
 
+# UpdateRepoIfRequested - Update git repo if --update flag set
+#
+# Arguments:
+#   $1 - src_dir (string)
+# Outputs: Status messages via Log
+# Returns: 0 if skipped or succeeded (set -e handles git failures)
+# Globals: Reads DO_UPDATE
 UpdateRepoIfRequested() {
-  local srcDir="$1"
-  [[ "${DOUPDATE}" -eq 1 ]] || return 0
+  local src_dir="$1"           # Source directory to update
+  
+  [[ "${DO_UPDATE}" -eq 1 ]] || return 0
 
-  [[ -d "${srcDir}/.git" ]] || Die "Cannot update: ${srcDir} is not a git repo"
+  [[ -d "${src_dir}/.git" ]] || Die "Cannot update: ${src_dir} is not a git repo"
 
-  Log "Updating repo (git fetch + pull): ${srcDir}"
-  (cd "${srcDir}" && git fetch --all --prune && git pull --ff-only)
+  Log "Updating repo (git fetch + pull): ${src_dir}"
+  (cd "${src_dir}" && git fetch --all --prune && git pull --ff-only)
 }
 
+# BuildDirForPreset - Determine build directory from preset
+#
+# Arguments:
+#   $1 - build_root (string)
+#   $2 - preset (string: cuda|metal|cpu)
+# Outputs: Build directory path to stdout
+# Returns: Exits on unknown preset, 0 otherwise
+# Globals: None
 BuildDirForPreset() {
-  local buildRoot="$1"
-  local preset="$2"
+  local build_root="$1"        # Build root directory
+  local preset="$2"            # Build preset
 
   case "${preset}" in
-    cuda)  echo "${buildRoot}/build-cuda" ;;
-    metal) echo "${buildRoot}/build-metal" ;;
-    cpu)   echo "${buildRoot}/build-cpu" ;;
+    cuda)  echo "${build_root}/build-cuda" ;;
+    metal) echo "${build_root}/build-metal" ;;
+    cpu)   echo "${build_root}/build-cpu" ;;
     *)     Die "Unknown preset: ${preset}" ;;
   esac
 }
 
-ConfigureCmake() {
-  local srcDir="$1"
-  local buildDir="$2"
-  local preset="$3"
-  local prefix="$4"
+# ConfigureCMake - Run CMake configuration for preset
+#
+# Arguments:
+#   $1 - src_dir (string)
+#   $2 - build_dir (string)
+#   $3 - preset (string: cuda|metal|cpu)
+#   $4 - prefix (string)
+# Outputs: CMake configuration output to stdout
+# Returns: 0 on success (set -e handles cmake failures)
+# Globals: Reads CUDACXX (for CUDA builds)
+ConfigureCMake() {
+  local src_dir="$1"           # Source directory
+  local build_dir="$2"         # Build directory
+  local preset="$3"            # Build preset
+  local prefix="$4"            # Install prefix
+  local rpath_args=()          # RPATH arguments for Linux
 
-  mkdir -p "${buildDir}"
+  mkdir -p "${build_dir}"
 
   # On Linux, make installed binaries look for shared libs relative to the install prefix.
   # This avoids relying on ldconfig/ld.so.conf.d for /opt-style prefixes.
-  local rpathArgs=()
   if IsLinux; then
-    rpathArgs=(
+    rpath_args=(
       -DCMAKE_INSTALL_RPATH='$ORIGIN/../lib'
       -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON
     )
@@ -194,25 +301,25 @@ ConfigureCmake() {
 
   case "${preset}" in
     cuda)
-      Log "Configuring CMake (CUDA): ${buildDir}"
-      cmake -S "${srcDir}" -B "${buildDir}" \
+      Log "Configuring CMake (CUDA): ${build_dir}"
+      cmake -S "${src_dir}" -B "${build_dir}" \
         -DGGML_CUDA=ON \
-		-DCMAKE_CUDA_COMPILER="${CUDACXX}" \
-        "${rpathArgs[@]}" \
+        -DCMAKE_CUDA_COMPILER="${CUDACXX}" \
+        "${rpath_args[@]}" \
         -DCMAKE_INSTALL_PREFIX="${prefix}"
       ;;
     metal)
-      Log "Configuring CMake (Metal): ${buildDir}"
-      cmake -S "${srcDir}" -B "${buildDir}" \
+      Log "Configuring CMake (Metal): ${build_dir}"
+      cmake -S "${src_dir}" -B "${build_dir}" \
         -DGGML_METAL=ON \
-        "${rpathArgs[@]}" \
+        "${rpath_args[@]}" \
         -DCMAKE_INSTALL_PREFIX="${prefix}"
       ;;
     cpu)
-      Log "Configuring CMake (CPU): ${buildDir}"
-      cmake -S "${srcDir}" -B "${buildDir}" \
+      Log "Configuring CMake (CPU): ${build_dir}"
+      cmake -S "${src_dir}" -B "${build_dir}" \
         -DGGML_CUDA=OFF -DGGML_METAL=OFF \
-        "${rpathArgs[@]}" \
+        "${rpath_args[@]}" \
         -DCMAKE_INSTALL_PREFIX="${prefix}"
       ;;
     *)
@@ -221,32 +328,63 @@ ConfigureCmake() {
   esac
 }
 
+# Build - Run CMake build
+#
+# Arguments:
+#   $1 - build_dir (string)
+# Outputs: Build output to stdout
+# Returns: 0 on success (set -e handles failures)
+# Globals: Reads JOBS
 Build() {
-  local buildDir="$1"
-  Log "Building: ${buildDir} (jobs=${JOBS})"
-  cmake --build "${buildDir}" -j"${JOBS}"
+  local build_dir="$1"         # Build directory
+  
+  Log "Building: ${build_dir} (jobs=${JOBS})"
+  cmake --build "${build_dir}" -j"${JOBS}"
 }
 
+# Install - Run CMake install
+#
+# Arguments:
+#   $1 - build_dir (string)
+#   $2 - prefix (string)
+# Outputs: Install output to stdout
+# Returns: 0 on success (set -e handles failures)
+# Globals: None
 Install() {
-  local buildDir="$1"
-  local prefix="$2"
+  local build_dir="$1"         # Build directory
+  local prefix="$2"            # Install prefix
 
   Log "Installing into: ${prefix}"
   mkdir -p "${prefix}"
-  cmake --install "${buildDir}"
+  cmake --install "${build_dir}"
 }
 
-# Returns true if not running on macOS (i.e., running on Linux)
+# IsLinux - Check if running on Linux (not macOS)
+#
+# Arguments: None
+# Outputs: None
+# Returns: 0 if Linux, 1 if macOS
+# Globals: None
 IsLinux() {
-  local unameS
-  unameS="$(uname -s | tr '[:upper:]' '[:lower:]')"
-  [[ "${unameS}" != "darwin" ]]
+  local uname_s=""             # Lowercase OS name
+  
+  uname_s="$(uname -s | tr '[:upper:]' '[:lower:]')"
+  [[ "${uname_s}" != "darwin" ]]
 }
 
-# Performs post-installation checks for shared library issues (Linux)
+# PostInstallSanity - Check for missing shared libraries (Linux only)
+#
+# Arguments:
+#   $1 - prefix (string)
+# Outputs: Sanity check results via Log
+# Returns: 0 (always succeeds, warnings only)
+# Globals: None
 PostInstallSanity() {
-  local prefix="$1"
-  local cli="${prefix}/bin/llama-cli"
+  local prefix="$1"            # Install prefix
+  local cli=""                 # Path to llama-cli binary
+  local missing=""             # Missing libraries output
+
+  cli="${prefix}/bin/llama-cli"
 
   if [[ ! -x "${cli}" ]]; then
     Log "Post-install sanity: llama-cli not found/executable at ${cli}"
@@ -255,9 +393,10 @@ PostInstallSanity() {
 
   if IsLinux; then
     Log "Post-install sanity: checking dynamic linker deps for llama-cli"
+    
     if command -v ldd >/dev/null 2>&1; then
-      local missing
       missing="$(ldd "${cli}" 2>/dev/null | awk '/not found/ {print}')"
+      
       if [[ -n "${missing}" ]]; then
         Log "Post-install sanity: missing shared libraries detected:"
         printf '%s\n' "${missing}"
@@ -273,103 +412,177 @@ PostInstallSanity() {
   fi
 }
 
+# PrintVersionIfAvailable - Display installed version
+#
+# Arguments:
+#   $1 - prefix (string)
+# Outputs: Version info via Log
+# Returns: 0 if version check passes, 1 on mismatch
+# Globals: None
 PrintVersionIfAvailable() {
-  local prefix="$1" 
-  local cli="${prefix}/bin/llama-cli"
+  local prefix="$1"            # Install prefix
+  local cli=""                 # Path to llama-cli binary
+  local installed_ver=""       # Installed version string
+  local required_ver=""        # Required version from versions.txt
 
-  if [[ -x "${cli}" ]]; then
-    local installed_ver="$("${cli}" --version 2>&1 | head -1)"
-    Log "llama-cli version: $installed_ver"
-    
-    # Version validation if versions.txt exists
-    if [[ -f "/opt/ai-configuration/desired_state/versions.txt" ]]; then
-      source "$(dirname "$0")/semver.sh"
-      source "$(dirname "$0")/tui.sh"
-      local required_ver="$(grep "llama" "/opt/ai-configuration/desired_state/versions.txt" | cut -d'=' -f2)"
-      
-      if ! validate_version "$installed_ver" "$required_ver"; then
-        Log "Version mismatch: installed $installed_ver, wanted $required_ver"
-        prompt_version_mismatch "llama" "$installed_ver" "$required_ver"
-        case $? in
-          0) return 1 ;; # User chose to proceed anyway
-          1) # User deferred
-             mkdir -p "/opt/ai-configuration/remediation_cookies"
-             touch "/opt/ai-configuration/remediation_cookies/llama.cookie"
-             return 1
-             ;;
-          *) exit 1 ;; # User cancelled
-        esac
-      fi
-    fi
-    return 0
-  else
+  cli="${prefix}/bin/llama-cli"
+
+  if [[ ! -x "${cli}" ]]; then
     Log "llama-cli not found at ${cli}"
     return 1
   fi
+
+  installed_ver="$("${cli}" --version 2>&1 | head -1)"
+  Log "llama-cli version: $installed_ver"
+  
+  # Version validation if versions.txt exists
+  if [[ -f "/opt/ai-configuration/desired_state/versions.txt" ]]; then
+    source "$(dirname "$0")/semver.sh" 2>/dev/null || true
+    source "$(dirname "$0")/tui.sh" 2>/dev/null || true
+    
+    required_ver="$(grep "llama" "/opt/ai-configuration/desired_state/versions.txt" | cut -d'=' -f2 || echo "")"
+    
+    if [[ -n "$required_ver" ]] && command -v ValidateVersion >/dev/null 2>&1; then
+      if ! ValidateVersion "$installed_ver" "$required_ver"; then
+        Log "Version mismatch: installed $installed_ver, wanted $required_ver"
+        
+        if command -v PromptVersionMismatch >/dev/null 2>&1; then
+          PromptVersionMismatch "llama" "$installed_ver" "$required_ver"
+          case $? in
+            0) return 0 ;;  # User chose to proceed
+            1)  # User deferred
+               mkdir -p "/opt/ai-configuration/remediation_cookies"
+               touch "/opt/ai-configuration/remediation_cookies/llama.cookie"
+               return 1
+               ;;
+            *)  # User cancelled
+               exit 1
+               ;;
+          esac
+        fi
+      fi
+    fi
+  fi
+  
+  return 0
 }
 
-# ------------------------------------------------------------------------------
-# Arg parsing
-# ------------------------------------------------------------------------------
+# ============================================================================
+# Argument Parsing
+# ============================================================================
 
-SRCDIR="${SRCDEFAULT}"
-BUILDROOT="${BUILDROOTDEFAULT}"
-PREFIX="${PREFIXDEFAULT}"
-REPOURL="${REPOURLDEFAULT}"
-PRESET="${PRESETDEFAULT}"
+# ParseArgsCLI - Parse command-line arguments
+#
+# Arguments: All command-line args ($@)
+# Outputs: None
+# Returns: Exits via ShowUsage on invalid args, 0 otherwise
+# Globals: Sets SRC_DIR, BUILD_ROOT, PREFIX, REPO_URL, PRESET, JOBS, DO_UPDATE, DO_CLEAN
+ParseArgsCLI() {
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --src)
+        SRC_DIR="$2"
+        shift 2
+        ;;
+      --build-root)
+        BUILD_ROOT="$2"
+        shift 2
+        ;;
+      --prefix)
+        PREFIX="$2"
+        shift 2
+        ;;
+      --repo)
+        REPO_URL="$2"
+        shift 2
+        ;;
+      --preset)
+        PRESET="$2"
+        shift 2
+        ;;
+      --jobs)
+        JOBS="$2"
+        shift 2
+        ;;
+      --update)
+        DO_UPDATE=1
+        shift 1
+        ;;
+      --clean)
+        DO_CLEAN=1
+        shift 1
+        ;;
+      --help|-h)
+        ShowUsage
+        ;;
+      *)
+        Die "Unknown argument: $1 (use --help)"
+        ;;
+    esac
+  done
 
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    --src) SRCDIR="$2"; shift 2;;
-    --build-root) BUILDROOT="$2"; shift 2;;
-    --prefix) PREFIX="$2"; shift 2;;
-    --repo) REPOURL="$2"; shift 2;;
-    --preset) PRESET="$2"; shift 2;;
-    --jobs) JOBS="$2"; shift 2;;
-    --update) DOUPDATE=1; shift 1;;
-    --clean) DOCLEAN=1; shift 1;;
-    --help|-h) Usage; exit 0;;
-    *) Die "Unknown argument: $1 (use --help)";;
-  esac
-done
+  # Auto-detect preset if not specified
+  if [[ -z "${PRESET}" ]]; then
+    PRESET="$(OSDefaultPreset)"
+  fi
 
-if [[ -z "${PRESET}" ]]; then
-  PRESET="$(OsDefaultPreset)"
-fi
+  # Derive build directory from preset
+  BUILD_DIR="$(BuildDirForPreset "${BUILD_ROOT}" "${PRESET}")"
+}
 
-BUILDDIR="$(BuildDirForPreset "${BUILDROOT}" "${PRESET}")"
+# ============================================================================
+# Main Execution
+# ============================================================================
 
-Log "Using:"
-Log "  repo:       ${REPOURL}"
-Log "  src:        ${SRCDIR}"
-Log "  build-root: ${BUILDROOT}"
-Log "  prefix:     ${PREFIX}"
-Log "  preset:     ${PRESET}"
-Log "  build-dir:  ${BUILDDIR}"
-Log "  update:     ${DOUPDATE}"
-Log "  clean:      ${DOCLEAN}"
-Log "  jobs:       ${JOBS}"
+# CoreExec - Main execution function
+#
+# Arguments: All command-line args ($@)
+# Outputs: Build progress and results via Log
+# Returns: 0 on success, exits on failure
+# Globals: Uses all global config variables
+CoreExec() {
+  ParseArgsCLI "$@"
 
-command -v git >/dev/null 2>&1 || Die "git not found"
-command -v cmake >/dev/null 2>&1 || Die "cmake not found"
+  Log "Using:"
+  Log "  repo:       ${REPO_URL}"
+  Log "  src:        ${SRC_DIR}"
+  Log "  build-root: ${BUILD_ROOT}"
+  Log "  prefix:     ${PREFIX}"
+  Log "  preset:     ${PRESET}"
+  Log "  build-dir:  ${BUILD_DIR}"
+  Log "  update:     ${DO_UPDATE}"
+  Log "  clean:      ${DO_CLEAN}"
+  Log "  jobs:       ${JOBS}"
 
-# CUDA builds require nvcc; fail early with a clear message if missing.
-if [[ "${PRESET}" == "cuda" ]]; then
-  EnsureCudaCompiler
-fi
+  # Verify dependencies
+  command -v git >/dev/null 2>&1 || Die "git not found"
+  command -v cmake >/dev/null 2>&1 || Die "cmake not found"
 
-CloneIfNeeded "${REPOURL}" "${SRCDIR}"
-UpdateRepoIfRequested "${SRCDIR}"
+  # CUDA builds require nvcc; fail early with a clear message if missing
+  if [[ "${PRESET}" == "cuda" ]]; then
+    EnsureCUDACompiler
+  fi
 
-if [[ "${DOCLEAN}" -eq 1 ]]; then
-  Log "Cleaning build dir: ${BUILDDIR}"
-  rm -rf "${BUILDDIR}"
-fi
+  # Build workflow
+  CloneIfNeeded "${REPO_URL}" "${SRC_DIR}"
+  UpdateRepoIfRequested "${SRC_DIR}"
 
-ConfigureCmake "${SRCDIR}" "${BUILDDIR}" "${PRESET}" "${PREFIX}"
-Build "${BUILDDIR}"
-Install "${BUILDDIR}" "${PREFIX}"
-PostInstallSanity "${PREFIX}"
-PrintVersionIfAvailable "${PREFIX}"
+  if [[ "${DO_CLEAN}" -eq 1 ]]; then
+    Log "Cleaning build dir: ${BUILD_DIR}"
+    rm -rf "${BUILD_DIR}"
+  fi
 
-Log "Done."
+  ConfigureCMake "${SRC_DIR}" "${BUILD_DIR}" "${PRESET}" "${PREFIX}"
+  Build "${BUILD_DIR}"
+  Install "${BUILD_DIR}" "${PREFIX}"
+  PostInstallSanity "${PREFIX}"
+  PrintVersionIfAvailable "${PREFIX}"
+
+  Log "Done."
+}
+
+# ============================================================================
+# Entry Point
+# ============================================================================
+
+CoreExec "$@"

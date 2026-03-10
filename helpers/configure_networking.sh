@@ -1,54 +1,114 @@
 #!/usr/bin/env bash
 # DGX Spark Networking Configuration Helper
-# Implements the following features:
-# 1. Interface detection
-# 2. MAC override (02:BB pattern)
+#
+# Configures network interfaces for DGX Spark cluster:
+# 1. Interface detection (LAN vs fabric)
+# 2. MAC override (02:BB pattern for fabric)
 # 3. NetworkManager profile setup
 # 4. Error handling and logging
 
 set -euo pipefail
 
-LOGDIR="/opt/ai-tools/logs/networking"
-CONF_DIR="/opt/ai-configuration/networking"
-LOG_FILE="${LOGDIR}/network_config_$(date +%Y%m%d_%H%M%S).log"
+# ============================================================================
+# Global Variables
+# ============================================================================
 
+LOG_DIR="/opt/ai-tools/logs/networking"                       # Log directory
+CONF_DIR="/opt/ai-configuration/networking"                   # Configuration directory
+LOG_FILE="${LOG_DIR}/network_config_$(date +%Y%m%d_%H%M%S).log"  # Timestamped log file
+
+LAN_IFACE=""                                                  # LAN interface (set by detection)
+FABRIC_IFACE=""                                               # Fabric interface (set by detection)
+
+# ============================================================================
+# Utility Functions
+# ============================================================================
+
+# Log - Write timestamped log message
+#
+# Arguments: All message components ($@)
+# Outputs: Timestamped message to stdout and log file
+# Returns: 0 (always succeeds)
+# Globals: Reads LOG_FILE
 Log() {
   echo "[$(date +'%FT%T')] $*" | tee -a "$LOG_FILE"
 }
 
-validate_network_tools() {
-  local tools=(nmcli ip ethtool)
+# ValidateNetworkTools - Check for required network utilities
+#
+# Arguments: None
+# Outputs: Error messages via Log if tools missing
+# Returns: 0 if all tools present, 1 if any missing
+# Globals: None
+ValidateNetworkTools() {
+  local tools=(nmcli ip ethtool)  # Required network utilities
+  local tool=""                   # Current tool being checked
+  
   for tool in "${tools[@]}"; do
     if ! command -v "$tool" >/dev/null; then
       Log "Missing required network tool: $tool"
       return 1
     fi
   done
-}
-
-derive_fabric_mac() {
-  local iface="$1"
-  local base_mac=$(ip link show "$iface" | awk '/ether/ {print $2}')
-  echo "02:${base_mac:3:8}"
-}
-
-detect_interfaces() {
-  # Priority: Ethernet with link, then first UP interface
-  LAN_IFACE=$(ip -o link show | awk '/state UP/ && !/loopback|docker/ {print $2}' | cut -d':' -f1 | head -1)
-  FABRIC_IFACE=$(ip -o link show | grep -v "$LAN_IFACE" | awk '/ether/ {print $2}' | cut -d':' -f1 | head -1)
-  export LAN_IFACE FABRIC_IFACE
-}
-
-apply_mac_override() {
-  local iface="$1"
-  local new_mac="$2"
   
-  # Store original MAC
-  local orig_mac=$(ip -o link show dev "$iface" | awk '{print $17}')
+  return 0
+}
+
+# DeriveFabricMAC - Generate fabric MAC from interface MAC
+#
+# Arguments:
+#   $1 - iface (string)
+# Outputs: Derived MAC address (02:BB:...) to stdout
+# Returns: 0 (always succeeds)
+# Globals: None
+DeriveFabricMAC() {
+  local iface="$1"                # Interface name
+  local base_mac=""               # Current MAC address
+  
+  base_mac=$(ip link show "$iface" | awk '/ether/ {print $2}')
+  
+  # Use 02:BB prefix, keep remaining bytes
+  echo "02:BB:${base_mac:6}"
+}
+
+# DetectInterfaces - Identify LAN and fabric interfaces
+#
+# Arguments: None
+# Outputs: Detection results via Log
+# Returns: 0 (always succeeds)
+# Globals: Sets LAN_IFACE, FABRIC_IFACE
+DetectInterfaces() {
+  # Priority: Ethernet with link UP, exclude loopback and docker
+  LAN_IFACE=$(ip -o link show | awk '/state UP/ && !/loopback|docker/ {print $2}' | cut -d':' -f1 | head -1)
+  
+  # Fabric interface: first ethernet interface that's not LAN
+  FABRIC_IFACE=$(ip -o link show | grep -v "$LAN_IFACE" | awk '/ether/ {print $2}' | cut -d':' -f1 | head -1)
+  
+  export LAN_IFACE FABRIC_IFACE
+  
+  Log "Detected LAN interface: ${LAN_IFACE:-none}"
+  Log "Detected fabric interface: ${FABRIC_IFACE:-none}"
+}
+
+# ApplyMACOverride - Set MAC address on interface
+#
+# Arguments:
+#   $1 - iface (string)
+#   $2 - new_mac (string)
+# Outputs: Status messages via Log
+# Returns: 0 (always succeeds with set -e)
+# Globals: Reads CONF_DIR
+ApplyMACOverride() {
+  local iface="$1"                # Interface name
+  local new_mac="$2"              # Target MAC address
+  local orig_mac=""               # Original MAC address
+  
+  # Store original MAC for recovery
+  orig_mac=$(ip -o link show dev "$iface" | awk '{print $17}')
   mkdir -p "$CONF_DIR"
   echo "$orig_mac" > "$CONF_DIR/${iface}_original.mac"
 
-  # Apply new MAC
+  # Apply new MAC if different
   if [[ "$(ip -o link show dev "$iface" | awk '{print $17}')" != "$new_mac" ]]; then
     ip link set dev "$iface" down
     ip link set dev "$iface" address "$new_mac"
@@ -59,10 +119,18 @@ apply_mac_override() {
   fi
 }
 
-create_nm_profile() {
-  local iface="$1"
-  local mac="$2"
-  local profile="spark_${iface}"
+# CreateNMProfile - Create NetworkManager connection profile
+#
+# Arguments:
+#   $1 - iface (string)
+#   $2 - mac (string)
+# Outputs: Profile creation output via Log
+# Returns: 0 (always succeeds with set -e)
+# Globals: None
+CreateNMProfile() {
+  local iface="$1"                # Interface name
+  local mac="$2"                  # MAC address for profile
+  local profile="spark_${iface}" # Connection profile name
   
   nmcli connection add \
     type ethernet \
@@ -77,12 +145,25 @@ create_nm_profile() {
   Log "Created NetworkManager profile: $profile"
 }
 
-main() {
-  mkdir -p "$LOGDIR"
-  validate_network_tools || exit 1
+# ============================================================================
+# Main Execution
+# ============================================================================
+
+# CoreExec - Main execution function
+#
+# Arguments: All command-line args ($@) (currently unused)
+# Outputs: Configuration progress via Log
+# Returns: Exits on error, 0 on success
+# Globals: Uses LAN_IFACE, FABRIC_IFACE
+CoreExec() {
+  local fabric_mac=""             # Derived fabric MAC address
+  
+  mkdir -p "$LOG_DIR"
+  
+  ValidateNetworkTools || exit 1
   
   Log "Starting network configuration"
-  detect_interfaces
+  DetectInterfaces
   
   if [[ -z "${LAN_IFACE:-}" ]]; then
     Log "ERROR: No suitable LAN interface found"
@@ -90,12 +171,18 @@ main() {
   fi
 
   if [[ -n "${FABRIC_IFACE:-}" ]]; then
-    local fabric_mac=$(derive_fabric_mac "$FABRIC_IFACE")
-    apply_mac_override "$FABRIC_IFACE" "$fabric_mac"
-    create_nm_profile "$FABRIC_IFACE" "$fabric_mac"
+    fabric_mac=$(DeriveFabricMAC "$FABRIC_IFACE")
+    ApplyMACOverride "$FABRIC_IFACE" "$fabric_mac"
+    CreateNMProfile "$FABRIC_IFACE" "$fabric_mac"
   else
     Log "No additional interface found for fabric network"
   fi
+  
+  Log "Network configuration complete"
 }
 
-main "$@"
+# ============================================================================
+# Entry Point
+# ============================================================================
+
+CoreExec "$@"
