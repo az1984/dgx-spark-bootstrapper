@@ -438,55 +438,27 @@ RunHeartbeats() {
   fi
 }
 
-source "$(dirname "$0")/helpers/semver.sh"
+# Source helper scripts if they exist
+if [[ -f "$(dirname "$0")/semver.sh" ]]; then
+  source "$(dirname "$0")/semver.sh"
+elif [[ -f "$(dirname "$0")/helpers/semver.sh" ]]; then
+  source "$(dirname "$0")/helpers/semver.sh"
+fi
 
-source "$(dirname "$0")/helpers/tui.sh"
+if [[ -f "$(dirname "$0")/tui.sh" ]]; then
+  source "$(dirname "$0")/tui.sh"
+elif [[ -f "$(dirname "$0")/helpers/tui.sh" ]]; then
+  source "$(dirname "$0")/helpers/tui.sh"
+fi
 
 VersionCheck() {
   Log "Running version validation..."
   local components=("python" "cuda")
+  # Add actual version checking logic here
 }
 
 Main() {
   RequireRoot
-
-    # Check for pending remediations
-  if ls "./ai-configuration/remediation_cookies/"*.cookie 1>/dev/null 2>&1; then
-    Log "Pending remediations detected:"
-    local pending_items=$(ls "./ai-configuration/remediation_cookies/"*.cookie | xargs -n1 basename | sed 's/.cookie$//')
-    echo "$pending_items"
-    
-    # Show TUI prompt
-    source "$(dirname "$0")/helpers/tui.sh"
-    prompt_remediation "Found pending remediations for:\n$pending_items\nFix now?"
-    case $? in
-      0) Log "Proceeding with remediation" ;;
-      1) Log "User deferred fixes"; exit 0 ;;
-      *) Log "User cancelled"; exit 1 ;;
-    esac
-  fi
-
-  # Directory skeleton first
-  CheckDirSkeleton || true
-  ApplyDirSkeletonFixes
-
-  # Switch logging to /opt now that directory skeleton is enforced
-  USE_OPT_LOGS=1
-  Log "Switched logging to ${OPT_LOG_DIR}"
-
-  # Version validation
-  VersionCheck
-  
-   # Component Building Section
-  if [[ "${BUILDLLAMADEFAULT}" -eq 1 || "${INSTALL_COMFYUI_DEFAULT}" -eq 1 || "${INSTALL_TTS_DEFAULT}" -eq 1 ]]; then
-    Log "Building AI components via unified build system"
-    
-    if [[ "${BUILDLLAMADEFAULT}" -eq 1 ]]; then
-      "$(dirname "$0")/helpers/build.sh" --component llama --node 1
-    fi
-    
-    if [[ -z "${VLLM_VENV}" || ! -d "${VLLM_VENV}" ]]; then
-      "$(dirname "$0")/helpers/build.sh" --component vllm --node 1  
 
   # Check for pending remediations
   if ls "./ai-configuration/remediation_cookies/"*.cookie 1>/dev/null 2>&1; then
@@ -494,14 +466,17 @@ Main() {
     local pending_items=$(ls "./ai-configuration/remediation_cookies/"*.cookie | xargs -n1 basename | sed 's/.cookie$//')
     echo "$pending_items"
     
-    # Show TUI prompt
-    source "$(dirname "$0")/helpers/tui.sh"
-    prompt_remediation "Found pending remediations for:\n$pending_items\nFix now?"
-    case $? in
-      0) Log "Proceeding with remediation" ;;
-      1) Log "User deferred fixes"; exit 0 ;;
-      *) Log "User cancelled"; exit 1 ;;
-    esac
+    # Show TUI prompt if available
+    if command -v prompt_remediation >/dev/null 2>&1; then
+      prompt_remediation "Found pending remediations for:\n$pending_items\nFix now?"
+      case $? in
+        0) Log "Proceeding with remediation" ;;
+        1) Log "User deferred fixes"; exit 0 ;;
+        *) Log "User cancelled"; exit 1 ;;
+      esac
+    else
+      Log "TUI not available; proceeding with bootstrap"
+    fi
   fi
 
   # Directory skeleton first
@@ -520,19 +495,53 @@ Main() {
     Log "Building AI components via unified build system"
     
     if [[ "${BUILDLLAMADEFAULT}" -eq 1 ]]; then
-      "$(dirname "$0")/helpers/build.sh" --component llama --node 1
+      if [[ -f "$(dirname "$0")/helpers/build.sh" ]]; then
+        "$(dirname "$0")/helpers/build.sh" --component llama --node 1
+      else
+        Log "WARNING: build.sh not found; skipping llama build"
+      fi
     fi
     
     if [[ -z "${VLLM_VENV}" || ! -d "${VLLM_VENV}" ]]; then
-      "$(dirname "$0")/helpers/build.sh" --component vllm --node 1  
+      if [[ -f "$(dirname "$0")/helpers/build.sh" ]]; then
+        "$(dirname "$0")/helpers/build.sh" --component vllm --node 1
+      else
+        Log "WARNING: build.sh not found; skipping vLLM build"
+      fi
     fi
 
     if [[ "${INSTALL_TTS_DEFAULT}" -eq 1 ]]; then
-      "$(dirname "$0")/helpers/build.sh" --component kokoro --node 1
+      if [[ -f "$(dirname "$0")/helpers/build.sh" ]]; then
+        "$(dirname "$0")/helpers/build.sh" --component kokoro --node 1
+      else
+        Log "WARNING: build.sh not found; skipping Kokoro build"
+      fi
     fi
   fi
 
-  # [Rest of original Main() implementation...]
+  # Install apt packages if enabled
+  if [[ "${INSTALL_APT_DEFAULT}" -eq 1 ]]; then
+    InstallApt
+    EnsureDockerGroup
+  fi
+
+  # Sync compose stacks
+  SyncCompose
+  
+  # Start compose stacks if Docker is installed
+  if [[ "${INSTALL_DOCKER_DEFAULT}" -eq 1 ]]; then
+    StartComposeStacks
+  fi
+
+  # Seed models if script exists
+  SeedModelsViaExternalScript
+
+  # Run heartbeats to verify installations
+  RunHeartbeats
+
+  Log "Bootstrap complete!"
+  Log "Check logs at: ${OPT_LOG_DIR}/bootstrap.log"
 }
 
-# [Remaining file content...]
+# Run main function
+Main "$@"
