@@ -106,8 +106,16 @@ EnsureVenv() {
     return 1
   fi
   
-  if [[ ! -d "$VENV_PATH" ]]; then
+  # Check for valid venv (must have bin/activate)
+  if [[ ! -f "$VENV_PATH/bin/activate" ]]; then
     echo "Creating virtual environment with ${python_cmd}: $VENV_PATH"
+    
+    # Only remove directory if it's non-empty and broken
+    if [[ -d "$VENV_PATH" ]] && [[ -n "$(ls -A "$VENV_PATH" 2>/dev/null)" ]]; then
+      echo "Removing broken venv directory: $VENV_PATH"
+      rm -rf "$VENV_PATH"
+    fi
+    
     "${python_cmd}" -m venv "$VENV_PATH"
     # shellcheck disable=SC1090
     source "$VENV_PATH/bin/activate"
@@ -120,9 +128,7 @@ EnsureVenv() {
   
   echo "Active Python in venv: $(python --version)"
 }
-  
-  if [[ ! -d "$VENV_PATH" ]]; then
-    echo "Creating virtual environment: $VENV_PATH"
+
     python3 -m venv "$VENV_PATH"
     # shellcheck disable=SC1090
     source "$VENV_PATH/bin/activate"

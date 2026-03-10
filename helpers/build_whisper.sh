@@ -55,8 +55,16 @@ ValidateDependencies() {
 EnsureVenv() {
   VENV_PATH="/opt/ai-tools/whisper-env"
   
-  if [[ ! -d "$VENV_PATH" ]]; then
+  # Check for valid venv (must have bin/activate)
+  if [[ ! -f "$VENV_PATH/bin/activate" ]]; then
     echo "Creating virtual environment: $VENV_PATH"
+    
+    # Only remove directory if it's non-empty and broken
+    if [[ -d "$VENV_PATH" ]] && [[ -n "$(ls -A "$VENV_PATH" 2>/dev/null)" ]]; then
+      echo "Removing broken venv directory: $VENV_PATH"
+      rm -rf "$VENV_PATH"
+    fi
+    
     python3 -m venv "$VENV_PATH"
     # shellcheck disable=SC1090
     source "$VENV_PATH/bin/activate"
