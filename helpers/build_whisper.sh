@@ -1,12 +1,35 @@
 #!/usr/bin/env bash
-# Whisper ASR builder - called from build.sh dispatcher
+# Whisper ASR builder - Component builder for speech-to-text
+#
+# Installs OpenAI Whisper and faster-whisper in a virtual environment
+# with CUDA support when available. Called by build.sh dispatcher.
 
 set -euo pipefail
 
 source "$(dirname "$0")/semver.sh"
 
-validate_dependencies() {
-  local required_tools=(git python3 pip ffmpeg)
+# ============================================================================
+# Global Variables
+# ============================================================================
+
+NODE_ID=""          # Target node ID for this build
+VENV_PATH=""        # Path to virtual environment
+VERSION_REQ=""      # Required version from versions.txt
+
+# ============================================================================
+# Functions
+# ============================================================================
+
+# ValidateDependencies - Check for required system tools
+#
+# Arguments: None
+# Outputs: Status messages to stdout, errors to stderr
+# Returns: 0 if all dependencies present, 1 if any missing
+# Globals: None
+ValidateDependencies() {
+  local required_tools=(git python3 pip ffmpeg)  # Required system commands
+  local tool=""                                  # Current tool being checked
+  
   for tool in "${required_tools[@]}"; do
     if ! command -v "$tool" >/dev/null; then
       echo "Missing dependency: $tool"
@@ -20,22 +43,42 @@ validate_dependencies() {
   else
     echo "WARNING: CUDA not detected, Whisper will run on CPU (slower)"
   fi
+  
+  return 0
 }
 
-ensure_venv() {
-  local venv_path="/opt/ai-tools/whisper-env-$1"
-  if [[ ! -d "$venv_path" ]]; then
-    python3 -m venv "$venv_path"
-    source "$venv_path/bin/activate"
+# EnsureVenv - Create or activate virtual environment
+#
+# Arguments:
+#   $1 - node ID (integer)
+# Outputs: Status messages to stdout
+# Returns: 0 (always succeeds, exits on venv creation failure)
+# Globals: Sets VENV_PATH
+EnsureVenv() {
+  local node_id="$1"  # Node ID for venv naming
+  
+  VENV_PATH="/opt/ai-tools/whisper-env-${node_id}"
+  
+  if [[ ! -d "$VENV_PATH" ]]; then
+    echo "Creating virtual environment: $VENV_PATH"
+    python3 -m venv "$VENV_PATH"
+    # shellcheck disable=SC1090
+    source "$VENV_PATH/bin/activate"
     pip install --upgrade pip
   else
-    source "$venv_path/bin/activate"
+    echo "Using existing virtual environment: $VENV_PATH"
+    # shellcheck disable=SC1090
+    source "$VENV_PATH/bin/activate"
   fi
-  
-  export WHISPER_VENV="$venv_path"
 }
 
-install_dependencies() {
+# InstallDependencies - Install Whisper and dependencies
+#
+# Arguments: None
+# Outputs: pip installation progress to stdout
+# Returns: 0 on success, non-zero on pip failure
+# Globals: None (assumes venv is activated)
+InstallDependencies() {
   echo "Installing Whisper dependencies..."
   
   # Install PyTorch first (CUDA-aware if available)
@@ -55,11 +98,15 @@ install_dependencies() {
   pip install soundfile librosa
 }
 
-download_models() {
+# DownloadModels - Pre-download common Whisper models
+#
+# Arguments: None
+# Outputs: Download progress to stdout
+# Returns: 0 (always succeeds, warnings on download failures)
+# Globals: None
+DownloadModels() {
   echo "Pre-downloading Whisper models..."
   
-  # Download common models to avoid first-run delays
-  # Models: tiny, base, small, medium, large-v3
   python -c "
 import whisper
 import os
@@ -80,7 +127,13 @@ for model_name in models:
 "
 }
 
-verify_installation() {
+# VerifyInstallation - Test Whisper installation
+#
+# Arguments: None
+# Outputs: Verification results to stdout
+# Returns: 0 on success, 1 on verification failure
+# Globals: None
+VerifyInstallation() {
   echo "Verifying Whisper installation..."
   
   python -c "
@@ -98,39 +151,85 @@ except Exception as e:
 "
 }
 
-build_whisper() {
-  local node_id="$1"
-  local log_file="/opt/ai-tools/logs/builds/whisper_$(date +%Y%m%d_%H%M%S).log"
+# LoadVersionRequirement - Read required version from versions.txt
+#
+# Arguments: None
+# Outputs: None
+# Returns: 0 (always succeeds, sets VERSION_REQ to "latest" if file missing)
+# Globals: Sets VERSION_REQ
+LoadVersionRequirement() {
+  local versions_file="/opt/ai-configuration/desired_state/versions.txt"  # Version spec file
   
-  # Version checking (if versions.txt exists)
-  local version_req="latest"
-  if [[ -f "/opt/ai-configuration/desired_state/versions.txt" ]]; then
-    version_req=$(grep "whisper" "/opt/ai-configuration/desired_state/versions.txt" | cut -d'=' -f2 || echo "latest")
+  VERSION_REQ="latest"
+  
+  if [[ -f "$versions_file" ]]; then
+    VERSION_REQ=$(grep "whisper" "$versions_file" | cut -d='=' -f2 || echo "latest")
   fi
+}
+
+# BuildWhisper - Main build orchestration function
+#
+# Arguments:
+#   $1 - node ID (integer)
+# Outputs: Build log to stdout (captured by dispatcher)
+# Returns: 0 on success, 1 on failure
+# Globals: Uses NODE_ID, VENV_PATH, VERSION_REQ
+BuildWhisper() {
+  local node_id="$1"          # Node ID for this build
+  local log_file=""           # Log file path for this build
+  local installed_ver=""      # Installed Whisper version
+  
+  NODE_ID="$node_id"
+  log_file="/opt/ai-tools/logs/builds/whisper_$(date +%Y%m%d_%H%M%S).log"
+  
+  # Ensure log directory exists
+  mkdir -p "$(dirname "$log_file")"
   
   {
     echo "=== Starting Whisper ASR installation ==="
-    echo "Node ID: $node_id"
-    echo "Target version: $version_req"
+    echo "Node ID: $NODE_ID"
     
-    ensure_venv "$node_id"
-    validate_dependencies || return 1
-
-    install_dependencies
-    download_models
-    verify_installation
-
-    local installed_ver=$(python -c "import whisper; print(whisper.__version__)" 2>/dev/null || echo "unknown")
+    LoadVersionRequirement
+    echo "Target version: $VERSION_REQ"
     
+    EnsureVenv "$NODE_ID"
+    ValidateDependencies || return 1
+    InstallDependencies
+    DownloadModels
+    VerifyInstallation
+    
+    installed_ver=$(python -c "import whisper; print(whisper.__version__)" 2>/dev/null || echo "unknown")
+    
+    echo ""
     echo "=== Whisper ASR installation successful ==="
     echo "Version: $installed_ver"
-    echo "Virtualenv: $(which python)"
+    echo "Virtual environment: $VENV_PATH"
+    echo "Python: $(which python)"
     echo "Model cache: /opt/ai-models/whisper"
     echo ""
     echo "Usage example:"
-    echo "  source $WHISPER_VENV/bin/activate"
+    echo "  source $VENV_PATH/bin/activate"
     echo "  whisper audio.mp3 --model medium --language en"
   } | tee "$log_file"
 }
 
-build_whisper "$@"
+# CoreExec - Entry point for build script
+#
+# Arguments: All CLI args ($@)
+# Outputs: Delegates to BuildWhisper
+# Returns: Exit code from BuildWhisper
+# Globals: None
+CoreExec() {
+  if [[ $# -lt 1 ]]; then
+    echo "Usage: build_whisper.sh <node_id>"
+    exit 1
+  fi
+  
+  BuildWhisper "$@"
+}
+
+# ============================================================================
+# Entry Point
+# ============================================================================
+
+CoreExec "$@"

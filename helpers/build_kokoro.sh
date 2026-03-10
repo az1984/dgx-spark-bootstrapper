@@ -1,59 +1,179 @@
 #!/usr/bin/env bash
-# Kokoro TTS builder - called from build.sh dispatcher
+# Kokoro TTS builder - Component builder for basic text-to-speech
+#
+# Installs Kokoro TTS in a virtual environment with version validation.
+# Called by build.sh dispatcher.
 
 set -euo pipefail
 
 source "$(dirname "$0")/semver.sh"
 
-validate_dependencies() {
-  local required_tools=(git python3 pip)
+# ============================================================================
+# Global Variables
+# ============================================================================
+
+NODE_ID=""          # Target node ID for this build
+VENV_PATH=""        # Path to virtual environment
+VERSION_REQ=""      # Required version from versions.txt
+
+# ============================================================================
+# Functions
+# ============================================================================
+
+# ValidateDependencies - Check for required system tools
+#
+# Arguments: None
+# Outputs: Status messages to stdout, errors to stderr
+# Returns: 0 if all dependencies present, 1 if any missing
+# Globals: None
+ValidateDependencies() {
+  local required_tools=(git python3 pip)  # Required system commands
+  local tool=""                           # Current tool being checked
+  
   for tool in "${required_tools[@]}"; do
     if ! command -v "$tool" >/dev/null; then
       echo "Missing dependency: $tool"
       return 1
     fi
   done
+  
+  return 0
 }
 
-ensure_venv() {
-  local venv_path="/opt/ai-tools/kokoro-env-$1"
-  if [[ ! -d "$venv_path" ]]; then
-    python3 -m venv "$venv_path"
-    source "$venv_path/bin/activate"
+# EnsureVenv - Create or activate virtual environment
+#
+# Arguments:
+#   $1 - node ID (integer)
+# Outputs: Status messages to stdout
+# Returns: 0 (always succeeds, exits on venv creation failure)
+# Globals: Sets VENV_PATH
+EnsureVenv() {
+  local node_id="$1"  # Node ID for venv naming
+  
+  VENV_PATH="/opt/ai-tools/kokoro-env-${node_id}"
+  
+  if [[ ! -d "$VENV_PATH" ]]; then
+    echo "Creating virtual environment: $VENV_PATH"
+    python3 -m venv "$VENV_PATH"
+    # shellcheck disable=SC1090
+    source "$VENV_PATH/bin/activate"
     pip install --upgrade pip
   else
-    source "$venv_path/bin/activate"
+    echo "Using existing virtual environment: $VENV_PATH"
+    # shellcheck disable=SC1090
+    source "$VENV_PATH/bin/activate"
   fi
 }
 
-install_dependencies() {
+# InstallDependencies - Install Kokoro TTS and dependencies
+#
+# Arguments: None
+# Outputs: pip installation progress to stdout
+# Returns: 0 on success, non-zero on pip failure
+# Globals: None (assumes venv is activated)
+InstallDependencies() {
+  echo "Installing Kokoro TTS dependencies..."
+  
   pip install --upgrade numpy soundfile torch
   pip install git+https://github.com/kokoro-ai/kokoro-tts.git
 }
 
-build_kokoro() {
-  local node_id="$1"
-  local log_file="/opt/ai-tools/logs/builds/kokoro_$(date +%Y%m%d_%H%M%S).log"
+# LoadVersionRequirement - Read required version from versions.txt
+#
+# Arguments: None
+# Outputs: None
+# Returns: 0 (always succeeds, sets VERSION_REQ to "latest" if file missing)
+# Globals: Sets VERSION_REQ
+LoadVersionRequirement() {
+  local versions_file="/opt/ai-configuration/desired_state/versions.txt"  # Version spec file
   
-  local version_req=$(grep "kokoro" "/opt/ai-configuration/desired_state/versions.txt" | cut -d'=' -f2)
+  VERSION_REQ="latest"
+  
+  if [[ -f "$versions_file" ]]; then
+    VERSION_REQ=$(grep "kokoro" "$versions_file" | cut -d'=' -f2 || echo "latest")
+  fi
+}
+
+# ValidateInstalledVersion - Check installed version meets requirements
+#
+# Arguments: None
+# Outputs: Version info to stdout, errors to stderr
+# Returns: 0 if version valid, 1 if mismatch
+# Globals: Reads VERSION_REQ
+ValidateInstalledVersion() {
+  local installed_ver=""  # Currently installed version
+  
+  installed_ver=$(python -c "from kokoro_tts import __version__; print(__version__)" 2>/dev/null || echo "0.0.0")
+  
+  echo "Installed version: $installed_ver"
+  echo "Required version: $VERSION_REQ"
+  
+  if [[ "$VERSION_REQ" == "latest" ]]; then
+    echo "No version requirement specified, accepting: $installed_ver"
+    return 0
+  fi
+  
+  if ! ValidateVersion "$installed_ver" "$VERSION_REQ"; then
+    echo "ERROR: Version mismatch (installed $installed_ver, required $VERSION_REQ)"
+    return 1
+  fi
+  
+  return 0
+}
+
+# BuildKokoro - Main build orchestration function
+#
+# Arguments:
+#   $1 - node ID (integer)
+# Outputs: Build log to stdout (captured by dispatcher)
+# Returns: 0 on success, 1 on failure
+# Globals: Uses NODE_ID, VENV_PATH, VERSION_REQ
+BuildKokoro() {
+  local node_id="$1"          # Node ID for this build
+  local log_file=""           # Log file path for this build
+  
+  NODE_ID="$node_id"
+  log_file="/opt/ai-tools/logs/builds/kokoro_$(date +%Y%m%d_%H%M%S).log"
+  
+  # Ensure log directory exists
+  mkdir -p "$(dirname "$log_file")"
   
   {
     echo "=== Starting Kokoro TTS installation ==="
-    ensure_venv "$node_id"
-    validate_dependencies || return 1
-
-    install_dependencies
-
-    local installed_ver=$(python -c "from kokoro_tts import __version__; print(__version__)" 2>/dev/null || echo "0.0.0")
-    if ! validate_version "$installed_ver" "$version_req"; then
-      echo "ERROR: Version mismatch (installed $installed_ver, required $version_req)"
-      return 1
-    fi
+    echo "Node ID: $NODE_ID"
     
+    LoadVersionRequirement
+    echo "Target version: $VERSION_REQ"
+    
+    EnsureVenv "$NODE_ID"
+    ValidateDependencies || return 1
+    InstallDependencies
+    ValidateInstalledVersion || return 1
+    
+    echo ""
     echo "=== Kokoro TTS installation successful ==="
-    echo "Version: $installed_ver"
-    echo "Virtualenv: $(which python)"
+    echo "Virtual environment: $VENV_PATH"
+    echo "Python: $(which python)"
   } | tee "$log_file"
 }
 
-build_kokoro "$@"
+# CoreExec - Entry point for build script
+#
+# Arguments: All CLI args ($@)
+# Outputs: Delegates to BuildKokoro
+# Returns: Exit code from BuildKokoro
+# Globals: None
+CoreExec() {
+  if [[ $# -lt 1 ]]; then
+    echo "Usage: build_kokoro.sh <node_id>"
+    exit 1
+  fi
+  
+  BuildKokoro "$@"
+}
+
+# ============================================================================
+# Entry Point
+# ============================================================================
+
+CoreExec "$@"

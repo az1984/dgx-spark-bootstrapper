@@ -1,13 +1,36 @@
 #!/usr/bin/env bash
-# Dia TTS builder - called from build.sh dispatcher
-# Multi-character audiobook generation with voice cloning
+# Dia TTS builder - Component builder for multi-character audiobook TTS
+#
+# Installs Coqui TTS with XTTS v2 for voice cloning. Supports multiple
+# character voices for audiobook narration. Called by build.sh dispatcher.
 
 set -euo pipefail
 
 source "$(dirname "$0")/semver.sh"
 
-validate_dependencies() {
-  local required_tools=(git python3 pip ffmpeg)
+# ============================================================================
+# Global Variables
+# ============================================================================
+
+NODE_ID=""          # Target node ID for this build
+VENV_PATH=""        # Path to virtual environment
+MODEL_DIR=""        # Path to model cache directory
+VERSION_REQ=""      # Required version from versions.txt
+
+# ============================================================================
+# Functions
+# ============================================================================
+
+# ValidateDependencies - Check for required system tools
+#
+# Arguments: None
+# Outputs: Status messages to stdout, errors to stderr
+# Returns: 0 if all dependencies present, 1 if any missing
+# Globals: None
+ValidateDependencies() {
+  local required_tools=(git python3 pip ffmpeg)  # Required system commands
+  local tool=""                                  # Current tool being checked
+  
   for tool in "${required_tools[@]}"; do
     if ! command -v "$tool" >/dev/null; then
       echo "Missing dependency: $tool"
@@ -21,22 +44,42 @@ validate_dependencies() {
   else
     echo "WARNING: CUDA not detected, Dia will be significantly slower"
   fi
+  
+  return 0
 }
 
-ensure_venv() {
-  local venv_path="/opt/ai-tools/dia-env-$1"
-  if [[ ! -d "$venv_path" ]]; then
-    python3 -m venv "$venv_path"
-    source "$venv_path/bin/activate"
+# EnsureVenv - Create or activate virtual environment
+#
+# Arguments:
+#   $1 - node ID (integer)
+# Outputs: Status messages to stdout
+# Returns: 0 (always succeeds, exits on venv creation failure)
+# Globals: Sets VENV_PATH
+EnsureVenv() {
+  local node_id="$1"  # Node ID for venv naming
+  
+  VENV_PATH="/opt/ai-tools/dia-env-${node_id}"
+  
+  if [[ ! -d "$VENV_PATH" ]]; then
+    echo "Creating virtual environment: $VENV_PATH"
+    python3 -m venv "$VENV_PATH"
+    # shellcheck disable=SC1090
+    source "$VENV_PATH/bin/activate"
     pip install --upgrade pip
   else
-    source "$venv_path/bin/activate"
+    echo "Using existing virtual environment: $VENV_PATH"
+    # shellcheck disable=SC1090
+    source "$VENV_PATH/bin/activate"
   fi
-  
-  export DIA_VENV="$venv_path"
 }
 
-install_dependencies() {
+# InstallDependencies - Install Dia TTS and dependencies
+#
+# Arguments: None
+# Outputs: pip installation progress to stdout
+# Returns: 0 on success, non-zero on pip failure
+# Globals: None (assumes venv is activated)
+InstallDependencies() {
   echo "Installing Dia TTS dependencies..."
   
   # Install PyTorch with CUDA support
@@ -50,34 +93,37 @@ install_dependencies() {
   pip install TTS  # Coqui TTS (includes XTTS for voice cloning)
   
   # Audio processing
-  pip install soundfile librosa scipy
-  pip install pydub
+  pip install soundfile librosa scipy pydub
   
   # Additional utilities
-  pip install numpy pandas tqdm
-  
-  # Optional: gradio for web UI
-  pip install gradio
+  pip install numpy pandas tqdm gradio
 }
 
-setup_model_cache() {
+# SetupModelCache - Create model and reference clips directories
+#
+# Arguments: None
+# Outputs: Directory creation messages to stdout
+# Returns: 0 (always succeeds)
+# Globals: Sets MODEL_DIR
+SetupModelCache() {
   echo "Setting up Dia model cache..."
   
-  local model_dir="/opt/ai-models/dia-tts"
-  mkdir -p "$model_dir"
-  mkdir -p "$model_dir/reference-clips"
+  MODEL_DIR="/opt/ai-models/dia-tts"
+  mkdir -p "$MODEL_DIR"
+  mkdir -p "$MODEL_DIR/reference-clips"
   
   # Create reference clips directory structure
-  mkdir -p "$model_dir/reference-clips/american-f1"
-  mkdir -p "$model_dir/reference-clips/american-f2"
-  mkdir -p "$model_dir/reference-clips/british-f"
-  mkdir -p "$model_dir/reference-clips/male"
-  mkdir -p "$model_dir/reference-clips/russian-f"
+  local voice_dirs=(american-f1 american-f2 british-f male russian-f)  # Voice character directories
+  local dir=""                                                          # Current directory being created
+  
+  for dir in "${voice_dirs[@]}"; do
+    mkdir -p "$MODEL_DIR/reference-clips/$dir"
+  done
   
   # Set cache directory for TTS models
   export COQUI_TOS_AGREED=1  # Agree to TTS model terms
   
-  cat > "$model_dir/README.txt" <<'EOF'
+  cat > "$MODEL_DIR/README.txt" <<'EOF'
 Dia TTS Reference Clips Directory
 ==================================
 
@@ -107,10 +153,16 @@ Usage:
     --out_path output.wav
 EOF
   
-  echo "Created reference clips directory: $model_dir/reference-clips"
+  echo "Created reference clips directory: $MODEL_DIR/reference-clips"
 }
 
-download_models() {
+# DownloadModels - Pre-download XTTS v2 models
+#
+# Arguments: None
+# Outputs: Download progress to stdout
+# Returns: 0 (always succeeds, warnings on download failures)
+# Globals: Reads MODEL_DIR
+DownloadModels() {
   echo "Pre-downloading Dia/XTTS models..."
   
   python -c "
@@ -118,7 +170,7 @@ from TTS.api import TTS
 import os
 
 # Set cache directory
-cache_dir = '/opt/ai-models/dia-tts/models'
+cache_dir = '$MODEL_DIR/models'
 os.makedirs(cache_dir, exist_ok=True)
 os.environ['TTS_HOME'] = cache_dir
 
@@ -138,10 +190,16 @@ except Exception as e:
 "
 }
 
-create_helper_scripts() {
+# CreateHelperScripts - Generate synthesis helper scripts
+#
+# Arguments: None
+# Outputs: Script creation messages to stdout
+# Returns: 0 (always succeeds)
+# Globals: Reads MODEL_DIR
+CreateHelperScripts() {
   echo "Creating Dia helper scripts..."
   
-  local scripts_dir="/opt/ai-tools/scripts/dia"
+  local scripts_dir="/opt/ai-tools/scripts/dia"  # Helper scripts directory
   mkdir -p "$scripts_dir"
   
   # Simple synthesis script
@@ -225,9 +283,6 @@ Usage: dia-multivoice.py --input chapter.txt --output chapter.wav
 """
 
 import argparse
-import os
-import re
-from TTS.api import TTS
 
 # TODO: Implement character detection and voice assignment
 # TODO: Add sentence splitting and prosody control
@@ -249,7 +304,13 @@ PYTHON
   echo "Created helper scripts in $scripts_dir"
 }
 
-verify_installation() {
+# VerifyInstallation - Test Dia TTS installation
+#
+# Arguments: None
+# Outputs: Verification results to stdout
+# Returns: 0 (always succeeds, warnings on verification failures)
+# Globals: None
+VerifyInstallation() {
   echo "Verifying Dia TTS installation..."
   
   python -c "
@@ -272,41 +333,67 @@ except Exception as e:
 "
 }
 
-build_dia() {
-  local node_id="$1"
-  local log_file="/opt/ai-tools/logs/builds/dia_$(date +%Y%m%d_%H%M%S).log"
+# LoadVersionRequirement - Read required version from versions.txt
+#
+# Arguments: None
+# Outputs: None
+# Returns: 0 (always succeeds, sets VERSION_REQ to "latest" if file missing)
+# Globals: Sets VERSION_REQ
+LoadVersionRequirement() {
+  local versions_file="/opt/ai-configuration/desired_state/versions.txt"  # Version spec file
   
-  # Version checking (if versions.txt exists)
-  local version_req="latest"
-  if [[ -f "/opt/ai-configuration/desired_state/versions.txt" ]]; then
-    version_req=$(grep "dia" "/opt/ai-configuration/desired_state/versions.txt" | cut -d'=' -f2 || echo "latest")
+  VERSION_REQ="latest"
+  
+  if [[ -f "$versions_file" ]]; then
+    VERSION_REQ=$(grep "dia" "$versions_file" | cut -d='=' -f2 || echo "latest")
   fi
+}
+
+# BuildDia - Main build orchestration function
+#
+# Arguments:
+#   $1 - node ID (integer)
+# Outputs: Build log to stdout (captured by dispatcher)
+# Returns: 0 on success, 1 on failure
+# Globals: Uses NODE_ID, VENV_PATH, MODEL_DIR, VERSION_REQ
+BuildDia() {
+  local node_id="$1"          # Node ID for this build
+  local log_file=""           # Log file path for this build
+  local installed_ver=""      # Installed TTS version
+  
+  NODE_ID="$node_id"
+  log_file="/opt/ai-tools/logs/builds/dia_$(date +%Y%m%d_%H%M%S).log"
+  
+  # Ensure log directory exists
+  mkdir -p "$(dirname "$log_file")"
   
   {
     echo "=== Starting Dia TTS installation ==="
-    echo "Node ID: $node_id"
-    echo "Target version: $version_req"
+    echo "Node ID: $NODE_ID"
     
-    ensure_venv "$node_id"
-    validate_dependencies || return 1
-
-    install_dependencies
-    setup_model_cache
-    download_models
-    create_helper_scripts
-    verify_installation
-
-    local installed_ver=$(python -c "from TTS import __version__; print(__version__)" 2>/dev/null || echo "unknown")
+    LoadVersionRequirement
+    echo "Target version: $VERSION_REQ"
+    
+    EnsureVenv "$NODE_ID"
+    ValidateDependencies || return 1
+    InstallDependencies
+    SetupModelCache
+    DownloadModels
+    CreateHelperScripts
+    VerifyInstallation
+    
+    installed_ver=$(python -c "from TTS import __version__; print(__version__)" 2>/dev/null || echo "unknown")
     
     echo ""
     echo "=== Dia TTS installation successful ==="
     echo "Version: $installed_ver"
-    echo "Virtualenv: $(which python)"
-    echo "Model cache: /opt/ai-models/dia-tts"
-    echo "Reference clips: /opt/ai-models/dia-tts/reference-clips"
+    echo "Virtual environment: $VENV_PATH"
+    echo "Python: $(which python)"
+    echo "Model cache: $MODEL_DIR"
+    echo "Reference clips: $MODEL_DIR/reference-clips"
     echo ""
     echo "Next steps:"
-    echo "1. Add reference clips (10-15s each) to /opt/ai-models/dia-tts/reference-clips/"
+    echo "1. Add reference clips (10-15s each) to $MODEL_DIR/reference-clips/"
     echo "2. Test with: /opt/ai-tools/scripts/dia/dia-synthesize.py"
     echo ""
     echo "Voice characters configured:"
@@ -318,4 +405,23 @@ build_dia() {
   } | tee "$log_file"
 }
 
-build_dia "$@"
+# CoreExec - Entry point for build script
+#
+# Arguments: All CLI args ($@)
+# Outputs: Delegates to BuildDia
+# Returns: Exit code from BuildDia
+# Globals: None
+CoreExec() {
+  if [[ $# -lt 1 ]]; then
+    echo "Usage: build_dia.sh <node_id>"
+    exit 1
+  fi
+  
+  BuildDia "$@"
+}
+
+# ============================================================================
+# Entry Point
+# ============================================================================
+
+CoreExec "$@"

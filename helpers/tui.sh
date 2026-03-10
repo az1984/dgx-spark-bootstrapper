@@ -1,37 +1,88 @@
 #!/usr/bin/env bash
 # TUI interaction system for bootstrap remediation
+#
+# Provides whiptail-based dialog prompts for user interaction during
+# bootstrap process, with cookie-based deferred fix tracking.
 
-COOKIE_DIR="./ai-configuration/remediation_cookies"
-LOG_FILE="./ai-configuration/logs/tui.log"
+set -euo pipefail
 
-init_cookie_dir() {
+# ============================================================================
+# Global Variables
+# ============================================================================
+
+COOKIE_DIR="/opt/ai-configuration/remediation_cookies"  # Deferred fix tracking
+LOG_FILE="/opt/ai-configuration/logs/tui.log"          # TUI interaction log
+
+# ============================================================================
+# Functions
+# ============================================================================
+
+# InitCookieDir - Ensure cookie and log directories exist
+#
+# Arguments: None
+# Outputs: None
+# Returns: 0 (always succeeds)
+# Globals: Reads COOKIE_DIR, LOG_FILE
+InitCookieDir() {
   mkdir -p "$COOKIE_DIR"
+  mkdir -p "$(dirname "$LOG_FILE")"
 }
 
-log_interaction() {
+# LogInteraction - Record TUI interaction to log file
+#
+# Arguments: All strings to log ($@)
+# Outputs: Timestamped log entry to LOG_FILE
+# Returns: 0 (always succeeds)
+# Globals: Reads LOG_FILE
+LogInteraction() {
   echo "$(date +'%FT%T') - $*" >> "$LOG_FILE"
 }
 
-prompt_version_mismatch() {
-  local component=$1
-  local current=$2
-  local required=$3
+# PromptVersionMismatch - Show version conflict dialog
+#
+# Arguments:
+#   $1 - component name (string)
+#   $2 - current version (string)
+#   $3 - required version (string)
+# Outputs: Whiptail dialog to user
+# Returns: 0 if user selects "Upgrade", 1 if "Skip"
+# Globals: None
+PromptVersionMismatch() {
+  local component="$1"    # Component with version mismatch
+  local current="$2"      # Currently installed version
+  local required="$3"     # Version requirement
   
   whiptail --title "Version Mismatch" \
-    --yesno "Current: $current\nRequired: $required" \
+    --yesno "Component: $component\nCurrent: $current\nRequired: $required\n\nUpgrade now?" \
     --yes-button "Upgrade" \
     --no-button "Skip" \
     12 60
 }
 
-prompt_remediation() {
-  local component="${1:-bootstrap}"
-  local message="${2:-$1}"
+# PromptRemediation - Show remediation required dialog
+#
+# Arguments:
+#   $1 - message to display (string), OR component name if 2 args
+#   $2 - message to display (string), optional
+# Outputs: Whiptail dialog to user
+# Returns:
+#   0 - User selected "Fix Now"
+#   1 - User selected "Later" (creates cookie)
+#   2 - User cancelled (ESC key)
+# Globals: Reads/writes COOKIE_DIR
+PromptRemediation() {
+  local component="bootstrap"  # Component name for cookie file
+  local message=""            # Message to display in dialog
   
-  # If only one arg, use it as message and default component to "bootstrap"
+  # Handle both single-arg and two-arg calling conventions
   if [[ $# -eq 1 ]]; then
     message="$1"
-    component="bootstrap"
+  elif [[ $# -eq 2 ]]; then
+    component="$1"
+    message="$2"
+  else
+    echo "Error: PromptRemediation requires 1 or 2 arguments" >&2
+    return 2
   fi
   
   whiptail --title "Remediation Required" \
@@ -40,11 +91,39 @@ prompt_remediation() {
     --no-button "Later" \
     10 60
   
-  case $? in
-    0) return 0 ;;
-    1) touch "$COOKIE_DIR/${component}.cookie"
-       log_interaction "DEFERRED: ${component}"
-       return 1 ;;
-    *) return 2 ;;
+  local exit_code=$?  # Exit code from whiptail
+  
+  case $exit_code in
+    0)
+      # User selected "Fix Now"
+      return 0
+      ;;
+    1)
+      # User selected "Later" - create cookie
+      touch "$COOKIE_DIR/${component}.cookie"
+      LogInteraction "DEFERRED: ${component}"
+      return 1
+      ;;
+    *)
+      # User cancelled (ESC)
+      return 2
+      ;;
   esac
 }
+
+# CoreExec - Initialize TUI system
+#
+# Arguments: None
+# Outputs: None
+# Returns: 0 (always succeeds)
+# Globals: None
+CoreExec() {
+  InitCookieDir
+}
+
+# ============================================================================
+# Entry Point
+# ============================================================================
+
+# Initialize on source (this script is sourced, not executed)
+CoreExec
