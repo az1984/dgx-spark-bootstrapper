@@ -12,7 +12,6 @@ source "$(dirname "$0")/semver.sh"
 # Global Variables
 # ============================================================================
 
-NODE_ID=""          # Target node ID for this build
 VENV_PATH=""        # Path to virtual environment
 VERSION_REQ=""      # Required version from versions.txt
 
@@ -42,15 +41,12 @@ ValidateDependencies() {
 
 # EnsureVenv - Create or activate virtual environment
 #
-# Arguments:
-#   $1 - node ID (integer)
+# Arguments: None
 # Outputs: Status messages to stdout
 # Returns: 0 (always succeeds, exits on venv creation failure)
 # Globals: Sets VENV_PATH
 EnsureVenv() {
-  local node_id="$1"  # Node ID for venv naming
-  
-  VENV_PATH="/opt/ai-tools/kokoro-env-${node_id}"
+  VENV_PATH="/opt/ai-tools/kokoro-env"
   
   if [[ ! -d "$VENV_PATH" ]]; then
     echo "Creating virtual environment: $VENV_PATH"
@@ -123,16 +119,13 @@ ValidateInstalledVersion() {
 
 # BuildKokoro - Main build orchestration function
 #
-# Arguments:
-#   $1 - node ID (integer)
-# Outputs: Build log to stdout (captured by dispatcher)
+# Arguments: None
+# Outputs: Build log to stdout
 # Returns: 0 on success, 1 on failure
-# Globals: Uses NODE_ID, VENV_PATH, VERSION_REQ
+# Globals: Uses VENV_PATH, VERSION_REQ
 BuildKokoro() {
-  local node_id="$1"          # Node ID for this build
   local log_file=""           # Log file path for this build
   
-  NODE_ID="$node_id"
   log_file="/opt/ai-tools/logs/builds/kokoro_$(date +%Y%m%d_%H%M%S).log"
   
   # Ensure log directory exists
@@ -140,12 +133,11 @@ BuildKokoro() {
   
   {
     echo "=== Starting Kokoro TTS installation ==="
-    echo "Node ID: $NODE_ID"
     
     LoadVersionRequirement
     echo "Target version: $VERSION_REQ"
     
-    EnsureVenv "$NODE_ID"
+    EnsureVenv
     ValidateDependencies || return 1
     InstallDependencies
     ValidateInstalledVersion || return 1
@@ -159,21 +151,16 @@ BuildKokoro() {
 
 # CoreExec - Entry point for build script
 #
-# Arguments: All CLI args ($@)
+# Arguments: None
 # Outputs: Delegates to BuildKokoro
 # Returns: Exit code from BuildKokoro
 # Globals: None
 CoreExec() {
-  if [[ $# -lt 1 ]]; then
-    echo "Usage: build_kokoro.sh <node_id>"
-    exit 1
-  fi
-  
-  BuildKokoro "$@"
+  BuildKokoro
 }
 
 # ============================================================================
 # Entry Point
 # ============================================================================
 
-CoreExec "$@"
+CoreExec

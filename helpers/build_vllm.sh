@@ -12,7 +12,6 @@ source "$(dirname "$0")/semver.sh"
 # Global Variables
 # ============================================================================
 
-NODE_ID=""          # Target node ID for this build
 VENV_PATH=""        # Path to virtual environment
 SRC_PATH=""         # Path to vLLM source directory
 VERSION_REQ=""      # Required version from versions.txt
@@ -43,15 +42,12 @@ ValidateDependencies() {
 
 # EnsureVenv - Create or activate virtual environment
 #
-# Arguments:
-#   $1 - node ID (integer)
+# Arguments: None
 # Outputs: Status messages to stdout
 # Returns: 0 (always succeeds, exits on venv creation failure)
 # Globals: Sets VENV_PATH
 EnsureVenv() {
-  local node_id="$1"  # Node ID for venv naming
-  
-  VENV_PATH="/opt/ai-tools/vllm-env-${node_id}"
+  VENV_PATH="/opt/ai-tools/vllm-env"
   
   if [[ ! -d "$VENV_PATH" ]]; then
     echo "Creating virtual environment: $VENV_PATH"
@@ -146,16 +142,13 @@ ValidateInstalledVersion() {
 
 # BuildVLLM - Main build orchestration function
 #
-# Arguments:
-#   $1 - node ID (integer)
-# Outputs: Build log to stdout (captured by dispatcher)
+# Arguments: None
+# Outputs: Build log to stdout
 # Returns: 0 on success, 1 on failure
-# Globals: Uses NODE_ID, VENV_PATH, SRC_PATH, VERSION_REQ
+# Globals: Uses VENV_PATH, SRC_PATH, VERSION_REQ
 BuildVLLM() {
-  local node_id="$1"          # Node ID for this build
   local log_file=""           # Log file path for this build
   
-  NODE_ID="$node_id"
   log_file="/opt/ai-tools/logs/builds/vllm_$(date +%Y%m%d_%H%M%S).log"
   
   # Ensure log directory exists
@@ -163,12 +156,11 @@ BuildVLLM() {
   
   {
     echo "=== Starting vLLM installation ==="
-    echo "Node ID: $NODE_ID"
     
     LoadVersionRequirement
     echo "Target version: $VERSION_REQ"
     
-    EnsureVenv "$NODE_ID"
+    EnsureVenv
     ValidateDependencies || return 1
     CloneOrUpdateSource
     InstallDependencies
@@ -184,21 +176,16 @@ BuildVLLM() {
 
 # CoreExec - Entry point for build script
 #
-# Arguments: All CLI args ($@)
+# Arguments: None
 # Outputs: Delegates to BuildVLLM
 # Returns: Exit code from BuildVLLM
 # Globals: None
 CoreExec() {
-  if [[ $# -lt 1 ]]; then
-    echo "Usage: build_vllm.sh <node_id>"
-    exit 1
-  fi
-  
-  BuildVLLM "$@"
+  BuildVLLM
 }
 
 # ============================================================================
 # Entry Point
 # ============================================================================
 
-CoreExec "$@"
+CoreExec

@@ -12,7 +12,6 @@ source "$(dirname "$0")/semver.sh"
 # Global Variables
 # ============================================================================
 
-NODE_ID=""          # Target node ID for this build
 VENV_PATH=""        # Path to virtual environment
 SRC_DIR=""          # Path to ComfyUI source directory
 MODEL_BASE=""       # Path to model storage base directory
@@ -51,15 +50,12 @@ ValidateDependencies() {
 
 # EnsureVenv - Create or activate virtual environment
 #
-# Arguments:
-#   $1 - node ID (integer)
+# Arguments: None
 # Outputs: Status messages to stdout
 # Returns: 0 (always succeeds, exits on venv creation failure)
 # Globals: Sets VENV_PATH
 EnsureVenv() {
-  local node_id="$1"  # Node ID for venv naming
-  
-  VENV_PATH="/opt/ai-tools/comfyui-env-${node_id}"
+  VENV_PATH="/opt/ai-tools/comfyui-env"
   
   if [[ ! -d "$VENV_PATH" ]]; then
     echo "Creating virtual environment: $VENV_PATH"
@@ -209,7 +205,6 @@ InstallCustomNodes() {
   fi
   
   echo "Custom nodes installed"
-  echo "Note: Additional nodes can be installed via ComfyUI Manager web interface"
 }
 
 # CreateLaunchScript - Generate ComfyUI launcher script
@@ -308,17 +303,14 @@ LoadVersionRequirement() {
 
 # BuildComfyUI - Main build orchestration function
 #
-# Arguments:
-#   $1 - node ID (integer)
-# Outputs: Build log to stdout (captured by dispatcher)
+# Arguments: None
+# Outputs: Build log to stdout
 # Returns: 0 on success, 1 on failure
-# Globals: Uses NODE_ID, VENV_PATH, SRC_DIR, MODEL_BASE, VERSION_REQ
+# Globals: Uses VENV_PATH, SRC_DIR, MODEL_BASE, VERSION_REQ
 BuildComfyUI() {
-  local node_id="$1"          # Node ID for this build
   local log_file=""           # Log file path for this build
   local installed_ver=""      # Installed ComfyUI version (git hash)
   
-  NODE_ID="$node_id"
   log_file="/opt/ai-tools/logs/builds/comfyui_$(date +%Y%m%d_%H%M%S).log"
   
   # Ensure log directory exists
@@ -326,12 +318,11 @@ BuildComfyUI() {
   
   {
     echo "=== Starting ComfyUI installation ==="
-    echo "Node ID: $NODE_ID"
     
     LoadVersionRequirement
     echo "Target version: $VERSION_REQ"
     
-    EnsureVenv "$NODE_ID"
+    EnsureVenv
     ValidateDependencies || return 1
     CloneOrUpdateComfyUI
     InstallDependencies
@@ -349,38 +340,27 @@ BuildComfyUI() {
     echo "Version (git): $installed_ver"
     echo "Source: $SRC_DIR"
     echo "Virtual environment: $VENV_PATH"
-    echo "Python: $(which python)"
     echo "Model directory: $MODEL_BASE"
     echo ""
     echo "Next steps:"
     echo "1. Download models to $MODEL_BASE/checkpoints/"
     echo "2. Launch with: /opt/ai-tools/scripts/launch_comfyui.sh"
     echo "3. Access at: http://localhost:8188"
-    echo ""
-    echo "Recommended starter models:"
-    echo "  - Stable Diffusion 1.5"
-    echo "  - SDXL Base"
-    echo "  - Flux Schnell (fast)"
   } | tee "$log_file"
 }
 
 # CoreExec - Entry point for build script
 #
-# Arguments: All CLI args ($@)
+# Arguments: None
 # Outputs: Delegates to BuildComfyUI
 # Returns: Exit code from BuildComfyUI
 # Globals: None
 CoreExec() {
-  if [[ $# -lt 1 ]]; then
-    echo "Usage: build_comfyui.sh <node_id>"
-    exit 1
-  fi
-  
-  BuildComfyUI "$@"
+  BuildComfyUI
 }
 
 # ============================================================================
 # Entry Point
 # ============================================================================
 
-CoreExec "$@"
+CoreExec

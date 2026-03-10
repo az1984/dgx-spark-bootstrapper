@@ -12,7 +12,6 @@ source "$(dirname "$0")/semver.sh"
 # Global Variables
 # ============================================================================
 
-NODE_ID=""          # Target node ID for this build
 VENV_PATH=""        # Path to virtual environment
 MODEL_DIR=""        # Path to model cache directory
 VERSION_REQ=""      # Required version from versions.txt
@@ -50,15 +49,12 @@ ValidateDependencies() {
 
 # EnsureVenv - Create or activate virtual environment
 #
-# Arguments:
-#   $1 - node ID (integer)
+# Arguments: None
 # Outputs: Status messages to stdout
 # Returns: 0 (always succeeds, exits on venv creation failure)
 # Globals: Sets VENV_PATH
 EnsureVenv() {
-  local node_id="$1"  # Node ID for venv naming
-  
-  VENV_PATH="/opt/ai-tools/dia-env-${node_id}"
+  VENV_PATH="/opt/ai-tools/dia-env"
   
   if [[ ! -d "$VENV_PATH" ]]; then
     echo "Creating virtual environment: $VENV_PATH"
@@ -146,7 +142,7 @@ Test chapters:
 - Ch. 7 - Two mains, emotional peak (consistency check)
 
 Usage:
-  source /opt/ai-tools/dia-env-*/bin/activate
+  source /opt/ai-tools/dia-env/bin/activate
   python -m TTS.bin.synthesize --text "Hello world" \
     --model_name tts_models/multilingual/multi-dataset/xtts_v2 \
     --speaker_wav reference-clips/american-f1/clip.wav \
@@ -274,33 +270,6 @@ PYTHON
 
   chmod +x "$scripts_dir/dia-synthesize.py"
   
-  # Multi-character script template
-  cat > "$scripts_dir/dia-multivoice.py" <<'PYTHON'
-#!/usr/bin/env python3
-"""
-Dia TTS - Multi-character audiobook generation
-Usage: dia-multivoice.py --input chapter.txt --output chapter.wav
-"""
-
-import argparse
-
-# TODO: Implement character detection and voice assignment
-# TODO: Add sentence splitting and prosody control
-# TODO: Implement audio stitching for multi-character scenes
-
-def main():
-    print("Multi-character audiobook generation")
-    print("This is a template - implement based on your specific needs")
-    print("")
-    print("For torture test: Ch. 5 'Sharing Is Caring'")
-    print("For consistency test: Ch. 7")
-
-if __name__ == "__main__":
-    main()
-PYTHON
-
-  chmod +x "$scripts_dir/dia-multivoice.py"
-  
   echo "Created helper scripts in $scripts_dir"
 }
 
@@ -345,23 +314,20 @@ LoadVersionRequirement() {
   VERSION_REQ="latest"
   
   if [[ -f "$versions_file" ]]; then
-    VERSION_REQ=$(grep "dia" "$versions_file" | cut -d='=' -f2 || echo "latest")
+    VERSION_REQ=$(grep "dia" "$versions_file" | cut -d'=' -f2 || echo "latest")
   fi
 }
 
 # BuildDia - Main build orchestration function
 #
-# Arguments:
-#   $1 - node ID (integer)
-# Outputs: Build log to stdout (captured by dispatcher)
+# Arguments: None
+# Outputs: Build log to stdout
 # Returns: 0 on success, 1 on failure
-# Globals: Uses NODE_ID, VENV_PATH, MODEL_DIR, VERSION_REQ
+# Globals: Uses VENV_PATH, MODEL_DIR, VERSION_REQ
 BuildDia() {
-  local node_id="$1"          # Node ID for this build
   local log_file=""           # Log file path for this build
   local installed_ver=""      # Installed TTS version
   
-  NODE_ID="$node_id"
   log_file="/opt/ai-tools/logs/builds/dia_$(date +%Y%m%d_%H%M%S).log"
   
   # Ensure log directory exists
@@ -369,12 +335,11 @@ BuildDia() {
   
   {
     echo "=== Starting Dia TTS installation ==="
-    echo "Node ID: $NODE_ID"
     
     LoadVersionRequirement
     echo "Target version: $VERSION_REQ"
     
-    EnsureVenv "$NODE_ID"
+    EnsureVenv
     ValidateDependencies || return 1
     InstallDependencies
     SetupModelCache
@@ -395,33 +360,21 @@ BuildDia() {
     echo "Next steps:"
     echo "1. Add reference clips (10-15s each) to $MODEL_DIR/reference-clips/"
     echo "2. Test with: /opt/ai-tools/scripts/dia/dia-synthesize.py"
-    echo ""
-    echo "Voice characters configured:"
-    echo "  - american-f1 (American English Female #1)"
-    echo "  - american-f2 (American English Female #2)"
-    echo "  - british-f (RP British English Female)"
-    echo "  - male (Male voice)"
-    echo "  - russian-f (Russian-born Female, mild accent)"
   } | tee "$log_file"
 }
 
 # CoreExec - Entry point for build script
 #
-# Arguments: All CLI args ($@)
+# Arguments: None
 # Outputs: Delegates to BuildDia
 # Returns: Exit code from BuildDia
 # Globals: None
 CoreExec() {
-  if [[ $# -lt 1 ]]; then
-    echo "Usage: build_dia.sh <node_id>"
-    exit 1
-  fi
-  
-  BuildDia "$@"
+  BuildDia
 }
 
 # ============================================================================
 # Entry Point
 # ============================================================================
 
-CoreExec "$@"
+CoreExec
