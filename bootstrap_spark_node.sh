@@ -463,34 +463,64 @@ VersionCheck() {
 DetectMissingComponents() {
   local missing=()
   
-  # Check for vLLM (check bin/activate, not just directory)
-  if [[ ! -f "${VLLM_VENV}/bin/activate" ]]; then
+  # Check for vLLM - try to get version from actual vllm command
+  if [[ ! -f "${VLLM_VENV}/bin/python" ]]; then
     missing+=("vllm")
+  else
+    # Try to get vLLM version - if this fails, vLLM isn't really installed
+    if ! "${VLLM_VENV}/bin/python" -m vllm.entrypoints.openai.api_server --version >/dev/null 2>&1; then
+      missing+=("vllm")
+    fi
   fi
   
-  # Check for llama.cpp
+  # Check for llama.cpp - run the actual binary with --version
   if [[ ! -x "${LLAMA_PREFIX}/bin/llama-cli" ]]; then
     missing+=("llama")
+  else
+    if ! "${LLAMA_PREFIX}/bin/llama-cli" --version >/dev/null 2>&1; then
+      missing+=("llama")
+    fi
   fi
   
-  # Check for ComfyUI (check both source and valid venv)
-  if [[ ! -d "${COMFYUI_SRC}/.git" ]] || [[ ! -f "${COMFYUI_VENV}/bin/activate" ]]; then
+  # Check for ComfyUI - try to run main.py --help
+  if [[ ! -d "${COMFYUI_SRC}/.git" ]]; then
     missing+=("comfyui")
+  elif [[ ! -f "${COMFYUI_VENV}/bin/python" ]]; then
+    missing+=("comfyui")
+  else
+    # Try to import the actual ComfyUI server - this is the real heartbeat
+    if ! "${COMFYUI_VENV}/bin/python" -c "import sys; sys.path.insert(0, '${COMFYUI_SRC}'); import server" >/dev/null 2>&1; then
+      missing+=("comfyui")
+    fi
   fi
   
-  # Check for Kokoro TTS (check bin/activate)
-  if [[ ! -f "${KOKORO_VENV}/bin/activate" ]]; then
+  # Check for Kokoro TTS - verify the actual package imports
+  if [[ ! -f "${KOKORO_VENV}/bin/python" ]]; then
     missing+=("kokoro")
+  else
+    # Try to import kokoro - this is the actual tool check
+    if ! "${KOKORO_VENV}/bin/python" -c "import kokoro; import soundfile" >/dev/null 2>&1; then
+      missing+=("kokoro")
+    fi
   fi
   
-  # Check for Whisper (check bin/activate)
-  if [[ ! -f "${AI_TOOLS}/whisper-env/bin/activate" ]]; then
+  # Check for Whisper - run whisper --help
+  if [[ ! -f "${AI_TOOLS}/whisper-env/bin/whisper" ]]; then
     missing+=("whisper")
+  else
+    if ! "${AI_TOOLS}/whisper-env/bin/whisper" --help >/dev/null 2>&1; then
+      missing+=("whisper")
+    fi
   fi
   
-  # Check for Dia (check bin/activate)
-  if [[ ! -f "${AI_TOOLS}/dia-env/bin/activate" ]]; then
+  # Check for Dia - verify kokoro package for Dia variant
+  if [[ ! -f "${AI_TOOLS}/dia-env/bin/python" ]]; then
     missing+=("dia")
+  else
+    # Dia uses kokoro, check if we can import it
+    if ! "${AI_TOOLS}/dia-env/bin/python" -c "import kokoro" >/dev/null 2>&1; then
+      missing+=("dia")
+    fi
   fi
   
   # Return missing list
