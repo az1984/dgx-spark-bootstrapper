@@ -559,32 +559,33 @@ PromptGreenfieldInstall() {
   fi
 }
 
-Main() {
+CoreExec() {
   RequireRoot
 
-  # Greenfield detection (check what's missing on fresh install)
-  PromptGreenfieldInstall
-
+  # =========================================================================
+  # Phase 1: Infrastructure Setup
+  # =========================================================================
+  
+  Log "Phase 1: Infrastructure Setup"
+  
   # Check for pending remediations
   if ls "./ai-configuration/remediation_cookies/"*.cookie 1>/dev/null 2>&1; then
     Log "Pending remediations detected:"
-    local pending_items=$(ls "./ai-configuration/remediation_cookies/"*.cookie | xargs -n1 basename | sed 's/.cookie$//')
+    local pending_items
+    pending_items=$(ls "./ai-configuration/remediation_cookies/"*.cookie | xargs -n1 basename | sed 's/.cookie$//')
     echo "$pending_items"
     
-    # Show TUI prompt if available
-    if command -v prompt_remediation >/dev/null 2>&1; then
-      prompt_remediation "Found pending remediations for:\n$pending_items\nFix now?"
-      case $? in
-        0) Log "Proceeding with remediation" ;;
-        1) Log "User deferred fixes; continuing with bootstrap" ;;
-        *) Log "User cancelled"; exit 1 ;;
-      esac
-    else
-      Log "TUI not available; proceeding with bootstrap"
-    fi
+    # Show TUI prompt
+    source "$(dirname "$0")/helpers/tui.sh"
+    prompt_remediation "Found pending remediations for:\n$pending_items\nFix now?"
+    case $? in
+      0) Log "Proceeding with remediation" ;;
+      1) Log "User deferred fixes"; exit 0 ;;
+      *) Log "User cancelled"; exit 1 ;;
+    esac
   fi
 
-  # Directory skeleton first
+  # Directory skeleton
   CheckDirSkeleton || true
   ApplyDirSkeletonFixes
 
@@ -592,10 +593,100 @@ Main() {
   USE_OPT_LOGS=1
   Log "Switched logging to ${OPT_LOG_DIR}"
 
-  # Version validation
-  VersionCheck
+  # =========================================================================
+  # Phase 2: System Packages (CRITICAL - Must be before builds!)
+  # =========================================================================
+  
+  Log "Phase 2: System Package Installation"
+  
+  if [[ "${INSTALL_APT_DEFAULT}" -eq 1 ]]; then
+    # Try to install from seed files first (includes CUDA toolkit)
+    if [[ -x "$(dirname "$0")/helpers/install_apt_from_seed.sh" ]]; then
+      Log "Installing APT packages from seed files..."
+      "$(dirname "$0")/helpers/install_apt_from_seed.sh" || {
+        Log "WARNING: Seed installation failed, falling back to baseline"
+        InstallApt
+      }
+    else
+      Log "Seed installer not found, using baseline InstallApt"
+      InstallApt
+    fi
+    
+    # Add CUDA to PATH (critical for component builds)
+    if [[ -d /usr/local/cuda/bin ]]; then
+      export PATH="/usr/local/cuda/bin:$PATH"
+      export LD_LIBRARY_PATH="/usr/local/cuda/lib64:${LD_LIBRARY_PATH:-}"
+      Log "Added CUDA to PATH: /usr/local/cuda/bin"
+    elif [[ -d /usr/local/cuda-13.0/bin ]]; then
+      export PATH="/usr/local/cuda-13.0/bin:$PATH"
+      export LD_LIBRARY_PATH="/usr/local/cuda-13.0/lib64:${LD_LIBRARY_PATH:-}"
+      Log "Added CUDA to PATH: /usr/local/cuda-13.0/bin"
+    fi
+  else
+    Log "APT installation disabled (INSTALL_APT_DEFAULT=0)"
+  fi
 
-  # Component Building Section
+  # =========================================================================
+  # Phase 3: Git Configuration
+  # =========================================================================
+  
+  Log "Phase 3: Git Configuration"
+  
+  # TODO: Add git credential configuration
+  # if [[ -x "$(dirname "$0")/helpers/configure_git.sh" ]]; then
+  #   "$(dirname "$0")/helpers/configure_git.sh"
+  # fi
+
+  # =========================================================================
+  # Phase 4: Network Configuration
+  # =========================================================================
+  
+  Log "Phase 4: Network Configuration"
+  
+  if [[ -x "$(dirname "$0")/helpers/configure_networking.sh" ]]; then
+    "$(dirname "$0")/helpers/configure_networking.sh" || {
+      Log "WARNING: Network configuration failed, continuing"
+    }
+  else
+    Log "Network configuration script not found, skipping"
+  fi
+
+  # =========================================================================
+  # Phase 5: Detect Missing Components (AFTER APT install)
+  # =========================================================================
+  
+  Log "Phase 5: Detecting Missing Components"
+  
+  local missing_components=()
+  DetectMissingComponents missing_components
+  
+  if [[ ${#missing_components[@]} -gt 0 ]]; then
+    Log "Missing components detected: ${missing_components[*]}"
+    
+    # Ask user if greenfield install
+    if PromptGreenfieldInstall "${missing_components[@]}"; then
+      Log "User approved greenfield install"
+      # Build flags are already set by PromptGreenfieldInstall
+    else
+      Log "User declined greenfield install"
+      # Flags already set to 0 by PromptGreenfieldInstall
+    fi
+  else
+    Log "All components already installed"
+    # Turn off all build flags
+    BUILDLLAMADEFAULT=0
+    INSTALL_VLLM=0
+    INSTALL_COMFYUI_DEFAULT=0
+    INSTALL_TTS_DEFAULT=0
+    INSTALL_WHISPER_DEFAULT=0
+    INSTALL_DIA_DEFAULT=0
+  fi
+
+  # =========================================================================
+  # Phase 6: Build AI Components (NOW has nvcc from Phase 2)
+  # =========================================================================
+  
+  Log "Phase 6: Building AI Components"
   Log "Checking build flags:"
   Log "  BUILDLLAMADEFAULT=${BUILDLLAMADEFAULT}"
   Log "  INSTALL_VLLM=${INSTALL_VLLM}"
@@ -603,152 +694,122 @@ Main() {
   Log "  INSTALL_TTS_DEFAULT=${INSTALL_TTS_DEFAULT}"
   Log "  INSTALL_WHISPER_DEFAULT=${INSTALL_WHISPER_DEFAULT}"
   Log "  INSTALL_DIA_DEFAULT=${INSTALL_DIA_DEFAULT}"
-  
- # Bootstrap Build Section - Error Handling Patch
-# Replace lines 607-677 in bootstrap_spark_node.sh
 
-  if [[ "${BUILDLLAMADEFAULT}" -eq 1 ]] || \
-     [[ "${INSTALL_VLLM}" -eq 1 ]] || \
-     [[ "${INSTALL_COMFYUI_DEFAULT}" -eq 1 ]] || \
-     [[ "${INSTALL_TTS_DEFAULT}" -eq 1 ]] || \
-     [[ "${INSTALL_WHISPER_DEFAULT}" -eq 1 ]] || \
-     [[ "${INSTALL_DIA_DEFAULT}" -eq 1 ]]; then
-    
-    Log "Building AI components via unified build system"
-    
-    # Track build failures (non-fatal)
-    local build_failures=()
-    
-    if [[ "${BUILDLLAMADEFAULT}" -eq 1 ]]; then
-      Log "Attempting llama build..."
-      if [[ -f "$(dirname "$0")/helpers/build.sh" ]]; then
-        Log "Running: $(dirname "$0")/helpers/build.sh --component llama"
-        if "$(dirname "$0")/helpers/build.sh" --component llama; then
-          Log "✓ llama build succeeded"
-        else
-          Log "✗ llama build failed (exit code: $?)"
-          build_failures+=("llama")
-        fi
-      else
-        Log "WARNING: build.sh not found at $(dirname "$0")/helpers/build.sh"
-        build_failures+=("llama (build.sh missing)")
-      fi
-    fi
-    
-    if [[ "${INSTALL_VLLM}" -eq 1 ]]; then
-      Log "Attempting vLLM build..."
-      if [[ -f "$(dirname "$0")/helpers/build.sh" ]]; then
-        Log "Running: $(dirname "$0")/helpers/build.sh --component vllm"
-        if "$(dirname "$0")/helpers/build.sh" --component vllm; then
-          Log "✓ vLLM build succeeded"
-        else
-          Log "✗ vLLM build failed (exit code: $?)"
-          build_failures+=("vllm")
-        fi
-      else
-        Log "WARNING: build.sh not found"
-        build_failures+=("vllm (build.sh missing)")
-      fi
-    fi
+  local build_failures=()
 
-    if [[ "${INSTALL_COMFYUI_DEFAULT}" -eq 1 ]]; then
-      Log "Attempting ComfyUI build..."
-      if [[ -f "$(dirname "$0")/helpers/build.sh" ]]; then
-        Log "Running: $(dirname "$0")/helpers/build.sh --component comfyui"
-        if "$(dirname "$0")/helpers/build.sh" --component comfyui; then
-          Log "✓ ComfyUI build succeeded"
-        else
-          Log "✗ ComfyUI build failed (exit code: $?)"
-          build_failures+=("comfyui")
-        fi
-      else
-        Log "WARNING: build.sh not found"
-        build_failures+=("comfyui (build.sh missing)")
-      fi
-    fi
-
-    if [[ "${INSTALL_TTS_DEFAULT}" -eq 1 ]]; then
-      Log "Attempting Kokoro build..."
-      if [[ -f "$(dirname "$0")/helpers/build.sh" ]]; then
-        Log "Running: $(dirname "$0")/helpers/build.sh --component kokoro"
-        if "$(dirname "$0")/helpers/build.sh" --component kokoro; then
-          Log "✓ Kokoro build succeeded"
-        else
-          Log "✗ Kokoro build failed (exit code: $?)"
-          build_failures+=("kokoro")
-        fi
-      else
-        Log "WARNING: build.sh not found"
-        build_failures+=("kokoro (build.sh missing)")
-      fi
-    fi
-    
-    if [[ "${INSTALL_WHISPER_DEFAULT}" -eq 1 ]]; then
-      Log "Attempting Whisper build..."
-      if [[ -f "$(dirname "$0")/helpers/build.sh" ]]; then
-        Log "Running: $(dirname "$0")/helpers/build.sh --component whisper"
-        if "$(dirname "$0")/helpers/build.sh" --component whisper; then
-          Log "✓ Whisper build succeeded"
-        else
-          Log "✗ Whisper build failed (exit code: $?)"
-          build_failures+=("whisper")
-        fi
-      else
-        Log "WARNING: build.sh not found"
-        build_failures+=("whisper (build.sh missing)")
-      fi
-    fi
-    
-    if [[ "${INSTALL_DIA_DEFAULT}" -eq 1 ]]; then
-      Log "Attempting Dia build..."
-      if [[ -f "$(dirname "$0")/helpers/build.sh" ]]; then
-        Log "Running: $(dirname "$0")/helpers/build.sh --component dia"
-        if "$(dirname "$0")/helpers/build.sh" --component dia; then
-          Log "✓ Dia build succeeded"
-        else
-          Log "✗ Dia build failed (exit code: $?)"
-          build_failures+=("dia")
-        fi
-      else
-        Log "WARNING: build.sh not found"
-        build_failures+=("dia (build.sh missing)")
-      fi
-    fi
-    
-    # Report build summary
-    if [[ ${#build_failures[@]} -gt 0 ]]; then
-      Log "Build failures: ${build_failures[*]}"
-      Log "Some components failed to build, but continuing with bootstrap"
+  # Build llama.cpp
+  if [[ "${BUILDLLAMADEFAULT}" -eq 1 ]]; then
+    Log "Attempting llama build..."
+    Log "Running: ./helpers/build.sh --component llama"
+    if "./helpers/build.sh" --component llama; then
+      Log "✓ llama build succeeded"
     else
-      Log "All component builds completed successfully"
+      Log "✗ llama build failed (exit code: $?)"
+      build_failures+=("llama")
     fi
-  else
-    Log "No build flags set; skipping component builds"
   fi
 
-  # Install apt packages if enabled
-  if [[ "${INSTALL_APT_DEFAULT}" -eq 1 ]]; then
-    InstallApt
-    EnsureDockerGroup
+  # Build vLLM
+  if [[ "${INSTALL_VLLM}" -eq 1 ]]; then
+    Log "Attempting vLLM build..."
+    Log "Running: ./helpers/build.sh --component vllm"
+    if "./helpers/build.sh" --component vllm; then
+      Log "✓ vLLM build succeeded"
+    else
+      Log "✗ vLLM build failed (exit code: $?)"
+      build_failures+=("vllm")
+    fi
   fi
 
-  # Sync compose stacks
-  SyncCompose
+  # Build ComfyUI
+  if [[ "${INSTALL_COMFYUI_DEFAULT}" -eq 1 ]]; then
+    Log "Attempting ComfyUI build..."
+    Log "Running: ./helpers/build.sh --component comfyui"
+    if "./helpers/build.sh" --component comfyui; then
+      Log "✓ ComfyUI build succeeded"
+    else
+      Log "✗ ComfyUI build failed (exit code: $?)"
+      build_failures+=("comfyui")
+    fi
+  fi
+
+  # Build Kokoro TTS
+  if [[ "${INSTALL_TTS_DEFAULT}" -eq 1 ]]; then
+    Log "Attempting Kokoro build..."
+    Log "Running: ./helpers/build.sh --component kokoro"
+    if "./helpers/build.sh" --component kokoro; then
+      Log "✓ Kokoro build succeeded"
+    else
+      Log "✗ Kokoro build failed (exit code: $?)"
+      build_failures+=("kokoro")
+    fi
+  fi
+
+  # Build Whisper
+  if [[ "${INSTALL_WHISPER_DEFAULT}" -eq 1 ]]; then
+    Log "Attempting Whisper build..."
+    Log "Running: ./helpers/build.sh --component whisper"
+    if "./helpers/build.sh" --component whisper; then
+      Log "✓ Whisper build succeeded"
+    else
+      Log "✗ Whisper build failed (exit code: $?)"
+      build_failures+=("whisper")
+    fi
+  fi
+
+  # Build Dia TTS
+  if [[ "${INSTALL_DIA_DEFAULT}" -eq 1 ]]; then
+    Log "Attempting Dia build..."
+    Log "Running: ./helpers/build.sh --component dia"
+    if "./helpers/build.sh" --component dia; then
+      Log "✓ Dia build succeeded"
+    else
+      Log "✗ Dia build failed (exit code: $?)"
+      build_failures+=("dia")
+    fi
+  fi
+
+  # Report build failures
+  if [[ ${#build_failures[@]} -gt 0 ]]; then
+    Log "Build failures: ${build_failures[*]}"
+    Log "Some components failed to build, but continuing with bootstrap"
+  fi
+
+  # =========================================================================
+  # Phase 7: Docker Setup
+  # =========================================================================
   
-  # Start compose stacks if Docker is installed
-  if [[ "${INSTALL_DOCKER_DEFAULT}" -eq 1 ]]; then
-    StartComposeStacks
-  fi
+  Log "Phase 7: Docker Setup"
+  
+  EnsureDockerGroup
 
-  # Seed models if script exists
+  # =========================================================================
+  # Phase 8: Compose Stacks
+  # =========================================================================
+  
+  Log "Phase 8: Compose Stack Deployment"
+  
+  SyncCompose
+  StartComposeStacks
+
+  # =========================================================================
+  # Phase 9: Model Seeding
+  # =========================================================================
+  
+  Log "Phase 9: Model Seeding"
+  
   SeedModelsViaExternalScript
 
-  # Run heartbeats to verify installations
+  # =========================================================================
+  # Phase 10: Verification (Heartbeats)
+  # =========================================================================
+  
+  Log "Phase 10: Running Heartbeats"
+  
   RunHeartbeats
 
   Log "Bootstrap complete!"
-  Log "Check logs at: ${OPT_LOG_DIR}/bootstrap.log"
 }
 
 # Run main function
-Main "$@"
+CoreExec "$@"

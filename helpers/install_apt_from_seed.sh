@@ -222,17 +222,39 @@ InstallPackages() {
 # Returns: 0 if critical packages present, 1 if missing
 # Globals: None
 VerifyCriticalPackages() {
-  local critical_packages=(nvcc cmake gcc g++ git python3 python3-venv)  # Must-have packages
-  local pkg=""          # Current package being checked
-  local missing=()      # Missing critical packages
+  local critical_commands=(cmake gcc g++ git python3)  # Commands that should be in PATH
+  local cmd=""          # Current command being checked
+  local missing=()      # Missing critical commands
   
   Log "Verifying critical packages..."
   
-  for pkg in "${critical_packages[@]}"; do
-    if ! command -v "$pkg" >/dev/null 2>&1; then
-      missing+=("$pkg")
+  # Check commands in PATH
+  for cmd in "${critical_commands[@]}"; do
+    if ! command -v "$cmd" >/dev/null 2>&1; then
+      missing+=("$cmd")
     fi
   done
+  
+  # Check nvcc (special case - may not be in PATH yet)
+  local nvcc_found=0
+  if command -v nvcc >/dev/null 2>&1; then
+    nvcc_found=1
+  elif [[ -x /usr/local/cuda/bin/nvcc ]]; then
+    nvcc_found=1
+    Log "Found nvcc at /usr/local/cuda/bin/nvcc (not in PATH)"
+  elif [[ -x /usr/local/cuda-13.0/bin/nvcc ]]; then
+    nvcc_found=1
+    Log "Found nvcc at /usr/local/cuda-13.0/bin/nvcc (not in PATH)"
+  fi
+  
+  if [[ $nvcc_found -eq 0 ]]; then
+    missing+=("nvcc")
+  fi
+  
+  # Check python3-venv (special case - check python module)
+  if ! python3 -c "import venv" 2>/dev/null; then
+    missing+=("python3-venv")
+  fi
   
   if [[ ${#missing[@]} -gt 0 ]]; then
     Log "ERROR: Critical packages missing: ${missing[*]}"
@@ -244,10 +266,19 @@ VerifyCriticalPackages() {
   
   # Show versions of key tools
   Log "Key package versions:"
-  Log "  CUDA compiler: $(nvcc --version 2>&1 | grep -oP 'release \K[0-9.]+' || echo 'NOT FOUND')"
-  Log "  CMake: $(cmake --version 2>&1 | head -1 | grep -oP '[0-9.]+' || echo 'NOT FOUND')"
-  Log "  GCC: $(gcc --version 2>&1 | head -1 | grep -oP '[0-9.]+' | head -1 || echo 'NOT FOUND')"
-  Log "  Python: $(python3 --version 2>&1 | grep -oP '[0-9.]+' || echo 'NOT FOUND')"
+  
+  # nvcc version
+  if command -v nvcc >/dev/null 2>&1; then
+    Log "  CUDA compiler: $(nvcc --version 2>&1 | grep -oP 'release \K[0-9.]+' || echo 'unknown')"
+  elif [[ -x /usr/local/cuda/bin/nvcc ]]; then
+    Log "  CUDA compiler: $(/usr/local/cuda/bin/nvcc --version 2>&1 | grep -oP 'release \K[0-9.]+' || echo 'unknown') (at /usr/local/cuda/bin)"
+  elif [[ -x /usr/local/cuda-13.0/bin/nvcc ]]; then
+    Log "  CUDA compiler: $(/usr/local/cuda-13.0/bin/nvcc --version 2>&1 | grep -oP 'release \K[0-9.]+' || echo 'unknown') (at /usr/local/cuda-13.0/bin)"
+  fi
+  
+  Log "  CMake: $(cmake --version 2>&1 | head -1 | grep -oP '[0-9.]+' || echo 'unknown')"
+  Log "  GCC: $(gcc --version 2>&1 | head -1 | grep -oP '[0-9.]+' | head -1 || echo 'unknown')"
+  Log "  Python: $(python3 --version 2>&1 | grep -oP '[0-9.]+' || echo 'unknown')"
   
   return 0
 }
