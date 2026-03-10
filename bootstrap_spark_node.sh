@@ -616,8 +616,8 @@ Main() {
     if [[ "${BUILDLLAMADEFAULT}" -eq 1 ]]; then
       Log "Attempting llama build..."
       if [[ -f "$(dirname "$0")/helpers/build.sh" ]]; then
-        Log "Running: $(dirname "$0")/helpers/build.sh --component llama --node 4"
-        "$(dirname "$0")/helpers/build.sh" --component llama --node 4
+        Log "Running: $(dirname "$0")/helpers/build.sh --component llama "
+        "$(dirname "$0")/helpers/build.sh" --component llama 
       else
         Log "WARNING: build.sh not found at $(dirname "$0")/helpers/build.sh"
       fi
@@ -626,8 +626,8 @@ Main() {
     if [[ "${INSTALL_VLLM}" -eq 1 ]]; then
       Log "Attempting vLLM build..."
       if [[ -f "$(dirname "$0")/helpers/build.sh" ]]; then
-        Log "Running: $(dirname "$0")/helpers/build.sh --component vllm --node 4"
-        "$(dirname "$0")/helpers/build.sh" --component vllm --node 4
+        Log "Running: $(dirname "$0")/helpers/build.sh --component vllm "
+        "$(dirname "$0")/helpers/build.sh" --component vllm 
       else
         Log "WARNING: build.sh not found at $(dirname "$0")/helpers/build.sh"
       fi
@@ -636,8 +636,8 @@ Main() {
     if [[ "${INSTALL_COMFYUI_DEFAULT}" -eq 1 ]]; then
       Log "Attempting ComfyUI build..."
       if [[ -f "$(dirname "$0")/helpers/build.sh" ]]; then
-        Log "Running: $(dirname "$0")/helpers/build.sh --component comfyui --node 4"
-        "$(dirname "$0")/helpers/build.sh" --component comfyui --node 4
+        Log "Running: $(dirname "$0")/helpers/build.sh --component comfyui "
+        "$(dirname "$0")/helpers/build.sh" --component comfyui 
       else
         Log "WARNING: build.sh not found at $(dirname "$0")/helpers/build.sh"
       fi
@@ -646,8 +646,8 @@ Main() {
     if [[ "${INSTALL_TTS_DEFAULT}" -eq 1 ]]; then
       Log "Attempting Kokoro build..."
       if [[ -f "$(dirname "$0")/helpers/build.sh" ]]; then
-        Log "Running: $(dirname "$0")/helpers/build.sh --component kokoro --node 4"
-        "$(dirname "$0")/helpers/build.sh" --component kokoro --node 4
+        Log "Running: $(dirname "$0")/helpers/build.sh --component kokoro "
+        "$(dirname "$0")/helpers/build.sh" --component kokoro 
       else
         Log "WARNING: build.sh not found at $(dirname "$0")/helpers/build.sh"
       fi
@@ -656,8 +656,8 @@ Main() {
     if [[ "${INSTALL_WHISPER_DEFAULT}" -eq 1 ]]; then
       Log "Attempting Whisper build..."
       if [[ -f "$(dirname "$0")/helpers/build.sh" ]]; then
-        Log "Running: $(dirname "$0")/helpers/build.sh --component whisper --node 4"
-        "$(dirname "$0")/helpers/build.sh" --component whisper --node 4
+        Log "Running: $(dirname "$0")/helpers/build.sh --component whisper "
+        "$(dirname "$0")/helpers/build.sh" --component whisper 
       else
         Log "WARNING: build.sh not found at $(dirname "$0")/helpers/build.sh"
       fi
@@ -666,8 +666,8 @@ Main() {
     if [[ "${INSTALL_DIA_DEFAULT}" -eq 1 ]]; then
       Log "Attempting Dia build..."
       if [[ -f "$(dirname "$0")/helpers/build.sh" ]]; then
-        Log "Running: $(dirname "$0")/helpers/build.sh --component dia --node 4"
-        "$(dirname "$0")/helpers/build.sh" --component dia --node 4
+        Log "Running: $(dirname "$0")/helpers/build.sh --component dia "
+        "$(dirname "$0")/helpers/build.sh" --component dia 
       else
         Log "WARNING: build.sh not found at $(dirname "$0")/helpers/build.sh"
       fi
