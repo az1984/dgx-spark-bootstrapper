@@ -463,8 +463,8 @@ VersionCheck() {
 DetectMissingComponents() {
   local missing=()
   
-  # Check for vLLM
-  if [[ ! -d "${VLLM_VENV}" ]]; then
+  # Check for vLLM (check bin/activate, not just directory)
+  if [[ ! -f "${VLLM_VENV}/bin/activate" ]]; then
     missing+=("vllm")
   fi
   
@@ -473,23 +473,23 @@ DetectMissingComponents() {
     missing+=("llama")
   fi
   
-  # Check for ComfyUI
-  if [[ ! -d "${COMFYUI_SRC}/.git" ]] || [[ ! -d "${COMFYUI_VENV}" ]]; then
+  # Check for ComfyUI (check both source and valid venv)
+  if [[ ! -d "${COMFYUI_SRC}/.git" ]] || [[ ! -f "${COMFYUI_VENV}/bin/activate" ]]; then
     missing+=("comfyui")
   fi
   
-  # Check for Kokoro TTS
-  if [[ ! -d "${KOKORO_VENV}" ]]; then
+  # Check for Kokoro TTS (check bin/activate)
+  if [[ ! -f "${KOKORO_VENV}/bin/activate" ]]; then
     missing+=("kokoro")
   fi
   
-  # Check for Whisper
-  if [[ ! -d "${AI_TOOLS}/whisper-env" ]]; then
+  # Check for Whisper (check bin/activate)
+  if [[ ! -f "${AI_TOOLS}/whisper-env/bin/activate" ]]; then
     missing+=("whisper")
   fi
   
-  # Check for Dia
-  if [[ ! -d "${AI_TOOLS}/dia-env" ]]; then
+  # Check for Dia (check bin/activate)
+  if [[ ! -f "${AI_TOOLS}/dia-env/bin/activate" ]]; then
     missing+=("dia")
   fi
   
