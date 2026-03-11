@@ -139,9 +139,13 @@ InstallDependencies() {
   echo "Installing Dia TTS dependencies..."
   
   # Install PyTorch with CUDA support
-  if command -v nvcc >/dev/null 2>&1; then
+  if command -v nvcc >/dev/null 2>&1 || \
+     [[ -x /usr/local/cuda/bin/nvcc ]] || \
+     [[ -x /usr/local/cuda-13.0/bin/nvcc ]]; then
+    echo "CUDA detected, installing PyTorch with CUDA support (cu121)"
     pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
   else
+    echo "WARNING: CUDA not detected, installing CPU-only PyTorch"
     pip install torch torchvision torchaudio
   fi
   

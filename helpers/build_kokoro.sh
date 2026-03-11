@@ -78,8 +78,17 @@ EnsureVenv() {
 InstallDependencies() {
   echo "Installing Kokoro TTS dependencies..."
   
-  # Install PyTorch first
-  pip install --upgrade torch
+  # Install PyTorch with CUDA support
+  # Check for nvcc in PATH or common CUDA locations
+  if command -v nvcc >/dev/null 2>&1 || \
+     [[ -x /usr/local/cuda/bin/nvcc ]] || \
+     [[ -x /usr/local/cuda-13.0/bin/nvcc ]]; then
+    echo "CUDA detected, installing PyTorch with CUDA support (cu121)"
+    pip install torch --index-url https://download.pytorch.org/whl/cu121
+  else
+    echo "WARNING: CUDA not detected, installing CPU-only PyTorch"
+    pip install --upgrade torch
+  fi
   
   # Install Kokoro from PyPI (official hexgrad package)
   # Note: This is the REAL Kokoro (Apache-licensed, 82M params)
