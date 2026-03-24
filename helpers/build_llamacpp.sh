@@ -30,9 +30,10 @@ REPO_URL_DEFAULT="https://github.com/ggml-org/llama.cpp"  # Default git repo URL
 
 SRC_DEFAULT="/opt/ai-tools/src/llama.cpp"                 # Default source directory
 BUILD_ROOT_DEFAULT="/opt/ai-tools/build/llama.cpp"        # Default build root
-PREFIX_DEFAULT="/opt/ai-tools/llama.cpp"                  # Default install prefix
+INSTALL_DIR_DEFAULT="/opt/ai-tools/llama.cpp"             # Default install directory
 
 PRESET_DEFAULT=""                                          # Auto-detect: linux->cuda, darwin->metal
+REF=""                                                     # Git ref (tag, commit, branch) to checkout
 DO_UPDATE=0                                                # Flag: git fetch/pull before build
 DO_CLEAN=0                                                 # Flag: delete build dir before build
 JOBS="$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)" # Parallel build jobs
@@ -40,7 +41,7 @@ JOBS="$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)" # Parallel build jobs
 # Set by argument parsing
 SRC_DIR="${SRC_DEFAULT}"                                   # Source checkout directory
 BUILD_ROOT="${BUILD_ROOT_DEFAULT}"                         # Build root directory
-PREFIX="${PREFIX_DEFAULT}"                                 # Install prefix
+INSTALL_DIR="${INSTALL_DIR_DEFAULT}"                       # Install directory (fully customizable, not a prefix)
 REPO_URL="${REPO_URL_DEFAULT}"                             # Git repo URL
 PRESET="${PRESET_DEFAULT}"                                 # Build preset (cuda|metal|cpu)
 BUILD_DIR=""                                               # Build directory (derived from preset)
@@ -67,11 +68,16 @@ Options:
   --build-root <path>         Build root directory (contains build-* subdirs)
                               Default: /opt/ai-tools/build/llama.cpp
 
-  --prefix <path>             Install prefix directory (installs into <prefix>/bin, etc.)
+  --install-dir <path>        Install directory (binaries go in <install-dir>/bin)
                               Default: /opt/ai-tools/llama.cpp
+                              Example: /opt/ai-tools/llama.cpp-rpc
 
   --repo <url>                Repo URL (for first clone)
                               Default: https://github.com/ggml-org/llama.cpp
+
+  --ref <ref>                 Git ref (tag, commit, branch) to checkout
+                              Default: none (uses current HEAD or --update pulls latest)
+                              Example: b4321, v1.0.0, master
 
   --preset <cuda|metal|cpu>   Build preset. If omitted:
                                 - Linux: cuda
@@ -80,16 +86,28 @@ Options:
   --jobs <n>                  Parallel build jobs
                               Default: detected CPU count
 
-  --update                    git fetch/pull before building
+  --update                    git fetch/pull before building (ignored if --ref specified)
   --clean                     remove the selected build directory before building
   --help                      show this help
 
 Examples (DGX Spark / Linux CUDA):
+  # Build latest main branch:
+  sudo ./build_llamacpp.sh \
+    --preset cuda --update
+
+  # Build specific commit for cluster (semantic install dir):
+  sudo ./build_llamacpp.sh \
+    --ref b4321 \
+    --install-dir /opt/ai-tools/llama.cpp-rpc \
+    --preset cuda
+
+  # Build specific tag with custom paths:
   sudo ./build_llamacpp.sh \
     --src /opt/ai-tools/src/llama.cpp \
     --build-root /opt/ai-tools/build/llama.cpp \
-    --prefix /opt/ai-tools/llama.cpp \
-    --preset cuda --update
+    --install-dir /opt/ai-tools/llama.cpp-v1.0.0 \
+    --ref v1.0.0 \
+    --preset cuda
 
 Example (macOS / Metal):
   ./build_llamacpp.sh --preset metal --update
@@ -233,22 +251,34 @@ CloneIfNeeded() {
   git clone "${repo_url}" "${src_dir}"
 }
 
-# UpdateRepoIfRequested - Update git repo if --update flag set
+# UpdateRepoIfRequested - Update git repo if --update flag set, or checkout --ref
 #
 # Arguments:
 #   $1 - src_dir (string)
 # Outputs: Status messages via Log
 # Returns: 0 if skipped or succeeded (set -e handles git failures)
-# Globals: Reads DO_UPDATE
+# Globals: Reads DO_UPDATE, REF
 UpdateRepoIfRequested() {
   local src_dir="$1"           # Source directory to update
   
-  [[ "${DO_UPDATE}" -eq 1 ]] || return 0
-
   [[ -d "${src_dir}/.git" ]] || Die "Cannot update: ${src_dir} is not a git repo"
-
-  Log "Updating repo (git fetch + pull): ${src_dir}"
-  (cd "${src_dir}" && git fetch --all --prune && git pull --ff-only)
+  
+  # If --ref specified, checkout that ref (tag, commit, or branch)
+  if [[ -n "${REF}" ]]; then
+    Log "Checking out ref: ${REF}"
+    (cd "${src_dir}" && git fetch --all --prune && git checkout "${REF}")
+    return 0
+  fi
+  
+  # Otherwise, if --update specified, pull latest
+  if [[ "${DO_UPDATE}" -eq 1 ]]; then
+    Log "Updating repo (git fetch + pull): ${src_dir}"
+    (cd "${src_dir}" && git fetch --all --prune && git pull --ff-only)
+    return 0
+  fi
+  
+  # Neither --ref nor --update: use whatever's currently checked out
+  Log "Using existing checkout (no --ref or --update specified)"
 }
 
 # BuildDirForPreset - Determine build directory from preset
@@ -285,7 +315,7 @@ ConfigureCMake() {
   local src_dir="$1"           # Source directory
   local build_dir="$2"         # Build directory
   local preset="$3"            # Build preset
-  local prefix="$4"            # Install prefix
+  local install_dir="$4"            # Install prefix
   local rpath_args=()          # RPATH arguments for Linux
 
   mkdir -p "${build_dir}"
@@ -304,23 +334,26 @@ ConfigureCMake() {
       Log "Configuring CMake (CUDA): ${build_dir}"
       cmake -S "${src_dir}" -B "${build_dir}" \
         -DGGML_CUDA=ON \
+        -DGGML_RPC=ON \
         -DCMAKE_CUDA_COMPILER="${CUDACXX}" \
         "${rpath_args[@]}" \
-        -DCMAKE_INSTALL_PREFIX="${prefix}"
+        -DCMAKE_INSTALL_PREFIX="${install_dir}"
       ;;
     metal)
       Log "Configuring CMake (Metal): ${build_dir}"
       cmake -S "${src_dir}" -B "${build_dir}" \
         -DGGML_METAL=ON \
+        -DGGML_RPC=ON \
         "${rpath_args[@]}" \
-        -DCMAKE_INSTALL_PREFIX="${prefix}"
+        -DCMAKE_INSTALL_PREFIX="${install_dir}"
       ;;
     cpu)
       Log "Configuring CMake (CPU): ${build_dir}"
       cmake -S "${src_dir}" -B "${build_dir}" \
         -DGGML_CUDA=OFF -DGGML_METAL=OFF \
+        -DGGML_RPC=ON \
         "${rpath_args[@]}" \
-        -DCMAKE_INSTALL_PREFIX="${prefix}"
+        -DCMAKE_INSTALL_PREFIX="${install_dir}"
       ;;
     *)
       Die "Unknown preset: ${preset}"
@@ -354,8 +387,8 @@ Install() {
   local build_dir="$1"         # Build directory
   local prefix="$2"            # Install prefix
 
-  Log "Installing into: ${prefix}"
-  mkdir -p "${prefix}"
+  Log "Installing into: ${install_dir}"
+  mkdir -p "${install_dir}"
   cmake --install "${build_dir}"
 }
 
@@ -384,7 +417,7 @@ PostInstallSanity() {
   local cli=""                 # Path to llama-cli binary
   local missing=""             # Missing libraries output
 
-  cli="${prefix}/bin/llama-cli"
+  cli="${install_dir}/bin/llama-cli"
 
   if [[ ! -x "${cli}" ]]; then
     Log "Post-install sanity: llama-cli not found/executable at ${cli}"
@@ -400,8 +433,8 @@ PostInstallSanity() {
       if [[ -n "${missing}" ]]; then
         Log "Post-install sanity: missing shared libraries detected:"
         printf '%s\n' "${missing}"
-        Log "Hint: add ${prefix}/lib to ld.so.conf.d and run ldconfig (requires root):"
-        Log "  echo \"${prefix}/lib\" | sudo tee /etc/ld.so.conf.d/ai-tools-llama.conf >/dev/null"
+        Log "Hint: add ${install_dir}/lib to ld.so.conf.d and run ldconfig (requires root):"
+        Log "  echo \"${install_dir}/lib\" | sudo tee /etc/ld.so.conf.d/ai-tools-llama.conf >/dev/null"
         Log "  sudo ldconfig"
       else
         Log "Post-install sanity: no missing shared libraries detected"
@@ -425,7 +458,7 @@ PrintVersionIfAvailable() {
   local installed_ver=""       # Installed version string
   local required_ver=""        # Required version from versions.txt
 
-  cli="${prefix}/bin/llama-cli"
+  cli="${install_dir}/bin/llama-cli"
 
   if [[ ! -x "${cli}" ]]; then
     Log "llama-cli not found at ${cli}"
@@ -476,7 +509,7 @@ PrintVersionIfAvailable() {
 # Arguments: All command-line args ($@)
 # Outputs: None
 # Returns: Exits via ShowUsage on invalid args, 0 otherwise
-# Globals: Sets SRC_DIR, BUILD_ROOT, PREFIX, REPO_URL, PRESET, JOBS, DO_UPDATE, DO_CLEAN
+# Globals: Sets SRC_DIR, BUILD_ROOT, INSTALL_DIR, REPO_URL, REF, PRESET, JOBS, DO_UPDATE, DO_CLEAN
 ParseArgsCLI() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -488,12 +521,21 @@ ParseArgsCLI() {
         BUILD_ROOT="$2"
         shift 2
         ;;
+      --install-dir)
+        INSTALL_DIR="$2"
+        shift 2
+        ;;
       --prefix)
-        PREFIX="$2"
+        # Backward compatibility: --prefix is alias for --install-dir
+        INSTALL_DIR="$2"
         shift 2
         ;;
       --repo)
         REPO_URL="$2"
+        shift 2
+        ;;
+      --ref)
+        REF="$2"
         shift 2
         ;;
       --preset)
@@ -544,15 +586,16 @@ CoreExec() {
   ParseArgsCLI "$@"
 
   Log "Using:"
-  Log "  repo:       ${REPO_URL}"
-  Log "  src:        ${SRC_DIR}"
-  Log "  build-root: ${BUILD_ROOT}"
-  Log "  prefix:     ${PREFIX}"
-  Log "  preset:     ${PRESET}"
-  Log "  build-dir:  ${BUILD_DIR}"
-  Log "  update:     ${DO_UPDATE}"
-  Log "  clean:      ${DO_CLEAN}"
-  Log "  jobs:       ${JOBS}"
+  Log "  repo:        ${REPO_URL}"
+  Log "  ref:         ${REF:-<none, using current HEAD or --update>}"
+  Log "  src:         ${SRC_DIR}"
+  Log "  build-root:  ${BUILD_ROOT}"
+  Log "  install-dir: ${INSTALL_DIR}"
+  Log "  preset:      ${PRESET}"
+  Log "  build-dir:   ${BUILD_DIR}"
+  Log "  update:      ${DO_UPDATE}"
+  Log "  clean:       ${DO_CLEAN}"
+  Log "  jobs:        ${JOBS}"
 
   # Verify dependencies
   command -v git >/dev/null 2>&1 || Die "git not found"
@@ -572,11 +615,11 @@ CoreExec() {
     rm -rf "${BUILD_DIR}"
   fi
 
-  ConfigureCMake "${SRC_DIR}" "${BUILD_DIR}" "${PRESET}" "${PREFIX}"
+  ConfigureCMake "${SRC_DIR}" "${BUILD_DIR}" "${PRESET}" "${INSTALL_DIR}"
   Build "${BUILD_DIR}"
-  Install "${BUILD_DIR}" "${PREFIX}"
-  PostInstallSanity "${PREFIX}"
-  PrintVersionIfAvailable "${PREFIX}"
+  Install "${BUILD_DIR}" "${INSTALL_DIR}"
+  PostInstallSanity "${INSTALL_DIR}"
+  PrintVersionIfAvailable "${INSTALL_DIR}"
 
   Log "Done."
 }
