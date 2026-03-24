@@ -307,7 +307,7 @@ BuildDirForPreset() {
 #   $1 - src_dir (string)
 #   $2 - build_dir (string)
 #   $3 - preset (string: cuda|metal|cpu)
-#   $4 - prefix (string)
+#   $4 - install_dir (string)
 # Outputs: CMake configuration output to stdout
 # Returns: 0 on success (set -e handles cmake failures)
 # Globals: Reads CUDACXX (for CUDA builds)
@@ -315,7 +315,7 @@ ConfigureCMake() {
   local src_dir="$1"           # Source directory
   local build_dir="$2"         # Build directory
   local preset="$3"            # Build preset
-  local install_dir="$4"            # Install prefix
+  local install_dir="$4"       # Install directory
   local rpath_args=()          # RPATH arguments for Linux
 
   mkdir -p "${build_dir}"
@@ -408,12 +408,12 @@ IsLinux() {
 # PostInstallSanity - Check for missing shared libraries (Linux only)
 #
 # Arguments:
-#   $1 - prefix (string)
+#   $1 - install_dir (string)
 # Outputs: Sanity check results via Log
 # Returns: 0 (always succeeds, warnings only)
 # Globals: None
 PostInstallSanity() {
-  local prefix="$1"            # Install prefix
+  local install_dir="$1"       # Install directory
   local cli=""                 # Path to llama-cli binary
   local missing=""             # Missing libraries output
 
@@ -448,12 +448,12 @@ PostInstallSanity() {
 # PrintVersionIfAvailable - Display installed version
 #
 # Arguments:
-#   $1 - prefix (string)
+#   $1 - install_dir (string)
 # Outputs: Version info via Log
 # Returns: 0 if version check passes, 1 on mismatch
 # Globals: None
 PrintVersionIfAvailable() {
-  local prefix="$1"            # Install prefix
+  local install_dir="$1"       # Install directory
   local cli=""                 # Path to llama-cli binary
   local installed_ver=""       # Installed version string
   local required_ver=""        # Required version from versions.txt
