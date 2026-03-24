@@ -379,13 +379,13 @@ Build() {
 #
 # Arguments:
 #   $1 - build_dir (string)
-#   $2 - prefix (string)
+#   $2 - install_dir (string)
 # Outputs: Install output to stdout
 # Returns: 0 on success (set -e handles failures)
 # Globals: None
 Install() {
   local build_dir="$1"         # Build directory
-  local prefix="$2"            # Install prefix
+  local install_dir="$2"       # Install directory
 
   Log "Installing into: ${install_dir}"
   mkdir -p "${install_dir}"
